@@ -7,8 +7,8 @@
 | --- | --- | --- |
 | 宿主 | `lib/index.js` | DSH 的 Node 进程（拦截模型调用、计费、余额、落盘） |
 | 客户端 | `lib/client.js` | 浏览器（输入框下方徽标 + 设置页「费用统计」） |
-| 构造 | `src/host.js` / `src/client.js` → `node scripts/build.mjs` | 改逻辑改 `src/`，重新构建 |
-| 自检 | `node scripts/check.mjs` | 72 项：计价 / 分时 / 收口 / 落盘 / slot 注册 / 重入 |
+| 构造 | 宿主半边直接改 `lib/index.js`；客户端半边改 `src/client.js` 后 `node scripts/build.mjs` | 两侧都不需要外部依赖 |
+| 自检 | `node scripts/check.mjs` | 87 项：计价 / 分时 / 收口 / node:fs 落盘 / fetch 余额 / slot 注册 / 重入 |
 
 ---
 
@@ -92,22 +92,29 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modul
 | 首次调用后 | 生成存档 `<DSH_HOME>/token-billing-ledger.json`（通常 `~/.dsh/token-billing-ledger.json`） |
 | Host 日志 | 含 `[billing]` 前缀的行：`apply:` / `http: mounted 5 routes` / `store: ready` |
 
-改过 `src/` 后跑一次 `node scripts/check.mjs`：它会真起一个 HTTP 服务把 5 条路由注册进去，
-用真实请求跑通记账、分时计价、单次收口、落盘、配置保存与清空，并校验客户端 bundle 的
-加载与 slot 注册。
+改过 `lib/index.js` 或 `src/client.js` 后跑一次 `node scripts/check.mjs`：它会真起一个 HTTP 服务
+把 5 条路由注册进去，用真实请求跑通记账、分时计价、单次收口、`node:fs` 落盘、`fetch` 拉余额
+（凭据从临时的 `.credentials.yaml` 读）与配置保存清空，并校验客户端 bundle 的加载与 slot 注册。
 
 ---
 
 ## 前置条件与权限
 
-- **必需**：DSH（`web` profile）。宿主需提供 `webServer` 与 `fs` / `settings`；
-  客户端需提供 `slots`。缺失时对应功能降级并给出提示，不影响计费本身。
-- **落盘**：账本写在 `~/.dsh/` 下（**工作区之外**），因此写入时按次请求
-  `danger-full-access` 策略；否则会被默认的 `workspace-write` 挡下，
-  表现为存档报 `file access denied under workspace-write mode`。
-- **余额**：需要 `credentials`（默认引用 `DEEPSEEK_API_KEY`）、`shell`，以及能访问
-  `https://api.deepseek.com`。这条**只读 GET** 同样按次以非沙箱方式执行。
-- 插件不发送任何遥测；API Key 只进子进程环境变量，不写日志、不下发前端。
+- **必需**：DSH（`web` profile）。宿主需提供 `webServer`（挂 HTTP 路由）；客户端需提供 `slots`。
+- **落盘**：账本用 `node:fs` 直接读写 `<DSH_HOME>/token-billing-ledger.json`。
+  **不需要任何 `fs` 服务** —— 插件挂在 profile 根级，看不见按作用域提供的 `fs`/`shell`，
+  早期版本正是因此报「存档异常 / fs 服务不可用」。
+- **余额**：用 `fetch` 请求 `https://api.deepseek.com/user/balance`（只读 GET）。
+  凭据按 `env` → `credentials` 服务 → `<DSH_HOME>/.credentials.yaml` 的 `refs` 段依次尝试，
+  默认引用名 `DEEPSEEK_API_KEY`。**不需要 `shell`**，也不再起子进程。
+- 插件不发送任何遥测；API Key 不写日志、不下发前端、不进命令行参数。
+
+改过 `lib/index.js` 或 `src/client.js` 后：
+
+```powershell
+node scripts/build.mjs   # 只重建 lib/client.js（宿主半边是直接维护的来源文件）
+node scripts/check.mjs   # 87 项自检
+```
 
 ---
 

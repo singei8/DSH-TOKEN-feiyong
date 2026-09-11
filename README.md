@@ -69,8 +69,8 @@ dsh plugin --profile web add link:E:/path/to/DSH-TOKEN-feiyong   # 本地克隆�
 源码在 `src/`，构建产物在 `lib/`（两者都提交进仓库，所以安装方无需构建）：
 
 ```powershell
-node scripts/build.mjs   # src/host.js -> lib/index.js，src/client.js -> lib/client.js
-node scripts/check.mjs   # 自检：真起 HTTP 服务跑通记账、分时计价、收口、落盘、slot 注册、重入
+node scripts/build.mjs   # 只重建客户端半边：src/client.js -> lib/client.js
+node scripts/check.mjs   # 87 项自检：真起 HTTP 服务跑通记账、分时计价、收口、node:fs 落盘、fetch 余额、slot 注册、重入
 ```
 
 插件对宿主能力是**可选依赖**：`webServer`、`llm`、`credentials`、`shell`、`fs`、`settings` 任一缺失时，对应功能降级并在界面上说明，不会让整个插件挂掉。
@@ -116,7 +116,7 @@ node scripts/check.mjs   # 自检：真起 HTTP 服务跑通记账、分时计�
 
 设置页 → **费用统计**：
 
-- **开关**：插件启用/关闭、余额显示、余额请求是否走沙箱、数据存档
+- **开关**：插件启用/关闭、余额显示、数据存档
 - **计价参数**：币种符号、时区偏移（北京时间 = 480）、高峰星期（七选多）、高峰时间段（可多段，逗号分隔）、低谷比例（仅用于「低谷 = 高峰 × 比例」批量填充）
 - **单价表**：每个档位独立设置「高峰 / 低谷」两套（命中 / 未命中 / 输出），可新增档位、重命名、删除
 - **账户**：凭据引用（默认 `DEEPSEEK_API_KEY`）、余额接口地址
@@ -127,8 +127,8 @@ node scripts/check.mjs   # 自检：真起 HTTP 服务跑通记账、分时计�
 ## 数据与隐私
 
 - **全部本地**：插件不发送任何遥测；除余额查询外不发起任何网络请求。
-- **API Key**：仅由 Host 侧通过凭据引用解析，只传给子进程的环境变量，或由子命令自行读取凭据文件；**不进入命令行参数、不写入日志、不下发到前端**。
-- **余额查询**：对 `https://api.deepseek.com/user/balance` 发起一条只读 GET。由于工作区沙箱没有网络权限，默认以「非沙箱」执行，可在设置页关闭。
+- **API Key**：仅由 Host 侧按 `env` → `credentials` 服务 → `<DSH_HOME>/.credentials.yaml` 的 `refs` 段解析，只用于那条余额查询请求的 `Authorization` 头；**不进入命令行参数、不写入日志、不下发到前端**。
+- **余额查询**：用 `fetch` 对 `https://api.deepseek.com/user/balance` 发起一条只读 GET，20 秒超时；不经过任何子进程。
 - **存档路径**：`<DSH_HOME>/token-billing-ledger.json`（例如 `~/.dsh/token-billing-ledger.json`），格式见 [`examples/ledger.sample.json`](examples/ledger.sample.json)。
 
 ---
@@ -146,7 +146,7 @@ node scripts/check.mjs   # 自检：真起 HTTP 服务跑通记账、分时计�
 ## 常见问题
 
 **Q：余额一直是 `…`？**
-A：看设置页「账户余额」卡片给出的原因。常见是：工作区沙箱没有网络权限（把「余额请求」保持在「非沙箱」）、凭据引用名不对、或接口地址不可达。Host 日志里搜 `[billing]` 可看到每一步的具体结果。
+A：看设置页「账户余额」卡片给出的原因。常见是：凭据引用名不对（检查 `<DSH_HOME>/.credentials.yaml` 的 `refs` 段）、宿主进程访问不了 `https://api.deepseek.com`、或接口地址被改错。Host 日志里搜 `[billing]` 可看到具体结果。
 
 **Q：存档显示异常？**
 A：设置页顶部会出现红色告警条，徽标上也会出现「存档异常」；把鼠标悬停在徽标上可以看到具体错误。
@@ -163,15 +163,15 @@ A：仓库名即项目名；插件在 DSH 里的显示名由 `lib/index.js` 的 
 
 ```
 DSH-TOKEN-feiyong/
-├─ lib/                         # 构建产物（提交进仓库，安装方无需构建）
-│  ├─ index.js                  # 宿主半边：出口 name / apply(ctx, rowConfig)
-│  └─ client.js                 # 客户端半边：__ModuleLoader__ 工厂，导出 name/inject/apply
+├─ lib/                         # 提交进仓库的产物，安装方无需构建
+│  ├─ index.js                  # 宿主半边（直接维护：HTTP 路由 / node:fs 账本 / fetch 余额）
+│  └─ client.js                 # 客户端半边（构建产物：__ModuleLoader__ 工厂，导出 name/inject/apply）
 ├─ src/
-│  ├─ host.js                   # 宿主半边源码（由 scripts/build.mjs 生成 lib/index.js）
-│  └─ client.js                 # 客户端半边源码（由 scripts/build.mjs 生成 lib/client.js）
+│  ├─ client.js                 # 客户端半边源码（动态包函数体，构建输入）
+│  └─ host.js                   # 动态包时代的宿主半边，历史参考，不再参与构建
 ├─ scripts/
-│  ├─ build.mjs                 # 定点变换 + 断言：src/*.js -> lib/*.js
-│  └─ check.mjs                 # 自检 72 项：真起 HTTP 服务跑通路由、记账、分时、落盘、slot
+│  ├─ build.mjs                 # 定点变换 + 断言：src/client.js -> lib/client.js
+│  └─ check.mjs                 # 自检 87 项：真起 HTTP 服务跑通路由、记账、分时、node:fs 落盘、fetch 余额、slot
 ├─ cordis.patch.yml             # dsh.bundle.patch：把本插件插入 profile 的层叠配置
 ├─ docs/
 │  ├─ billing-explained.html    # 「本对话」计费逻辑可视化：流程图 / 公式 / 逐笔回放 / 计算器

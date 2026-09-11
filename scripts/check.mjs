@@ -5,16 +5,21 @@
  *
  * 覆盖：
  *   宿主  apply 后注册 5 条路由；路由只接受 POST + 自定义头；账本记账、
- *         分时计价（高峰/低谷各自单价）、配置保存、清空、内存存档落盘。
+ *         分时计价（高峰/低谷各自单价）、配置保存、清空、node:fs 落盘、
+ *         fetch 拉余额（凭据从 .credentials.yaml 读取）。
  *   客户端 lib/client.js 能被 __ModuleLoader__ 加载，导出 name/inject/apply，
  *         注册且只注册 settings.section 与 conversation.composer.dock，
- *         并且不再含动态沙箱遗留（host.call / cordis-panel）。
+ *         并且不再含动态沙箱遗留（host.call / styles.insert / cordis-panel）。
+ *
+ * 关键回归：宿主半边不得再依赖按作用域提供的 fs / settings / shell 服务
+ * （根级插件 ctx 看不到它们，曾在真实宿主里表现为徽标「存档异常」）。
  *
  * 退出码 0 表示全部通过；任一条失败抛错并以非 0 退出。
  */
 
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -43,10 +48,44 @@ function near(actual, expected, label) {
 }
 
 /* ================================================================== *
+ * 0. 隔离的 DSH_HOME 与凭据文件
+ * ================================================================== */
+
+const home = mkdtempSync(join(tmpdir(), 'dsh-token-feiyong-'))
+const STORE_PATH = join(home, 'token-billing-ledger.json')
+mkdirSync(home, { recursive: true })
+writeFileSync(
+  join(home, '.credentials.yaml'),
+  [
+    'version: 1',
+    'refs:',
+    '  DEEPSEEK_API_KEY: test-key-from-file',
+    '  OPENAI_API_KEY: another-key',
+    'records:',
+    '  client-connection/browser-session:',
+    '    kind: grant',
+    '    payload:',
+    '      version: 1',
+    '      secret: must-not-be-used',
+    '',
+  ].join('\n'),
+  'utf8',
+)
+process.env.DSH_HOME = home
+delete process.env.DEEPSEEK_API_KEY
+
+/* ================================================================== *
  * 1. 宿主半边：真起 HTTP 服务，把路由注册进去
  * ================================================================== */
 
 console.log('\n[host] lib/index.js')
+
+const hostSource = read('lib/index.js')
+for (const forbidden of ["hostCtx.get('fs')", "hostCtx.get('settings')", "hostCtx.get('shell')"]) {
+  ok(!hostSource.includes(forbidden), 'host half does not read ' + forbidden)
+}
+ok(hostSource.includes("import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'"), 'host half imports node:fs')
+ok(hostSource.includes('await fetch(config.balanceUrl'), 'host half uses fetch for the balance probe')
 
 const host = await import(new URL('../lib/index.js', import.meta.url).href)
 eq(host.name, 'dsh-token-feiyong', 'export name')
@@ -55,7 +94,20 @@ eq(typeof host.apply, 'function', 'export apply')
 const ROUTES = []
 const registered = []
 let requestHandler = null
+let balanceAuth = ''
+let balanceHits = 0
+
 const server = createServer((request, response) => {
+  if (request.url === '/fake-balance') {
+    balanceHits += 1
+    balanceAuth = String(request.headers.authorization ?? '')
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({
+      is_available: true,
+      balance_infos: [{ currency: 'CNY', total_balance: '32.31', granted_balance: '5.00', topped_up_balance: '27.31' }],
+    }))
+    return
+  }
   if (requestHandler !== null) requestHandler(request, response)
 })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -71,34 +123,24 @@ const webServer = {
   },
 }
 
-/** 内存 fs，签名与 DSH 的 fs 服务一致（resolve / readText / writeText）。 */
-const disk = new Map()
-const fakeFs = {
-  async resolve(path) { return path },
-  async readText(target) {
-    if (!disk.has(target)) throw new Error('ENOENT: ' + target)
-    return disk.get(target)
-  },
-  async writeText(target, text) { disk.set(target, text) },
-}
-const STORE_PATH = join('C:\\Users\\test\\.dsh', 'token-billing-ledger.json')
-
+/** 记录插件向 ctx 要过哪些服务：真实根级 ctx 里这些按作用域提供的服务都拿不到。 */
+const requestedServices = []
 const listeners = {}
 const effects = []
 const ctx = {
   on(event, callback) { (listeners[event] ??= []).push(callback) },
-  get(name) {
-    if (name === 'fs') return fakeFs
-    if (name === 'settings') return { prepareDocument: async () => 'C:\\Users\\test\\.dsh\\settings.json' }
-    return undefined
-  },
+  get(name) { requestedServices.push(name); return undefined },
   inject(_services, callback) { callback(ctx) },
   effect(callback, label) { effects.push(label); callback() },
   webServer,
   logger: { info() {}, warn() {} },
 }
 
-host.apply(ctx, { currency: '\u00a5' })
+host.apply(ctx, {
+  currency: '\u00a5',
+  balanceUrl: origin + '/fake-balance',
+  credentialRef: 'DEEPSEEK_API_KEY',
+})
 await new Promise((resolve) => setTimeout(resolve, 50))
 
 eq(ROUTES.length, 5, 'registered route count')
@@ -219,14 +261,16 @@ state = await withClock('2026-09-14T12:00:00Z', async () => (await call('state',
 eq(state.lastTurn.calls, 4, 'last turn calls')
 near(state.lastTurn.cost, 7.5 + 3.75 + 3.75 + 6.08, 'last turn cost (sum of the 4 recorded calls)')
 eq(state.todayTotals.calls, 3, 'today totals only counts the rows of that local day')
-ok(typeof state.store.path === 'string' && state.store.path.endsWith('token-billing-ledger.json'), 'store path resolved')
 
-/* ---------------- 存档落盘 ---------------- */
+/* ---------------- 落盘（node:fs，路径由 DSH_HOME 决定） ---------------- */
+
+eq(state.store.path, STORE_PATH, 'store path resolves under DSH_HOME')
+eq(state.store.error, '', 'no store error')
 
 const stored = await call('store', { sessionId: 's-test' })
 eq(stored.status, 200, 'POST store -> 200')
-ok(disk.has(STORE_PATH), 'ledger flushed to disk at ' + STORE_PATH)
-const payload = JSON.parse(disk.get(STORE_PATH))
+ok(existsSync(STORE_PATH), 'ledger written to ' + STORE_PATH)
+const payload = JSON.parse(readFileSync(STORE_PATH, 'utf8'))
 eq(payload.version, 3, 'store version')
 eq(payload.totals.calls, 4, 'store totals.calls')
 ok(Array.isArray(payload.rows) && payload.rows.length === 4, 'store rows persisted')
@@ -236,7 +280,11 @@ ok(Array.isArray(payload.rows) && payload.rows.length === 4, 'store rows persist
 // 场景：补丁热重载（profile 的 patchReload: live）会让同一个模块实例再次 apply，
 // 而 ESM 模块在进程内是复用的。若 apply 不复位内存聚合，loadStore 会把账本里的
 // 聚合再并入一次，totals 翻倍——实测在真实宿主里出现过 calls 185 -> 382。
-host.apply(ctx, { currency: '\u00a5' })
+host.apply(ctx, {
+  currency: '\u00a5',
+  balanceUrl: origin + '/fake-balance',
+  credentialRef: 'DEEPSEEK_API_KEY',
+})
 await new Promise((resolve) => setTimeout(resolve, 50))
 const afterRemount = (await call('state', { sessionId: 's-test' })).payload
 eq(afterRemount.totals.calls, 4, 'second apply does not double count totals')
@@ -244,7 +292,19 @@ near(afterRemount.totals.cost, payload.totals.cost, 'second apply does not doubl
 eq(afterRemount.rows.length, 4, 'second apply keeps rows de-duplicated')
 eq(afterRemount.store.path, STORE_PATH, 'second apply keeps the same store path')
 
-/* ---------------- 配置保存 ---------------- */
+/* ---------------- 余额：fetch + .credentials.yaml ---------------- */
+
+const balance = await call('balance', { sessionId: 's-test' })
+eq(balance.status, 200, 'POST balance -> 200')
+eq(balance.payload.balance.ok, true, 'balance ok')
+near(balance.payload.balance.total, 32.31, 'balance total')
+near(balance.payload.balance.granted, 5, 'balance granted')
+eq(balance.payload.balance.currency, 'CNY', 'balance currency')
+eq(balance.payload.balance.via, 'fetch:file', 'balance key came from .credentials.yaml')
+ok(balanceHits > 0, 'balance endpoint was actually called')
+eq(balanceAuth, 'Bearer test-key-from-file', 'balance request carried the key as a Bearer header')
+
+/* ---------------- 配置保存与清空 ---------------- */
 
 const saved = await call('save', {
   sessionId: 's-test',
@@ -255,12 +315,15 @@ eq(saved.payload.config.currency, 'CNY', 'saved currency')
 eq(saved.payload.config.offPeakRatio, 0.4, 'saved offPeakRatio')
 near(saved.payload.config.prices.default.cacheHit, 1, 'saved price override')
 
-/* ---------------- 清空 ---------------- */
-
 const cleared = await call('reset', { sessionId: 's-test' })
 eq(cleared.status, 200, 'POST reset -> 200')
 eq(cleared.payload.totals.calls, 0, 'reset clears totals')
 eq(cleared.payload.rows.length, 0, 'reset clears rows')
+
+/* ---------------- 只向 ctx 要过合理的东西 ---------------- */
+
+const badRequests = requestedServices.filter((name) => name !== 'credentials')
+eq(badRequests.length, 0, 'never asked ctx.get for anything but credentials (asked: ' + (badRequests.join(',') || 'none') + ')')
 
 server.close()
 
@@ -354,5 +417,7 @@ eq(bySlot.get('settings.section').label, '费用统计', 'settings.section label
 eq(bySlot.get('conversation.composer.dock').id, 'token-billing', 'composer dock id')
 ok(!bySlot.has('sidebar.footer.action'), 'does not shadow sidebar.footer.action')
 ok(registrations.every((item) => typeof item.Component === 'function'), 'all registrations pass a component')
+
+rmSync(home, { recursive: true, force: true })
 
 console.log('\n' + String(passed) + ' checks passed\n')

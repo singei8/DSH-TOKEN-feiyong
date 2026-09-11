@@ -155,7 +155,7 @@ tarball: https://github.com/singei8/DSH-TOKEN-feiyong/releases/download/v1.2.0/d
 | 条目文件 | `data/plugins/singei8__DSH-TOKEN-feiyong.yml`（内容见下） | ⏳ 待提 PR |
 | npm 包 | 未发布 | ⏳ 可选，不影响收录 |
 
-**移植已完成并验证**：`node scripts/check.mjs` 72 项自检全过（真起 HTTP 服务跑通 5 条路由、
+**移植已完成并验证**：`node scripts/check.mjs` 87 项自检全过（真起 HTTP 服务跑通 5 条路由、
 记账、高峰/低谷单价含周末判档、单次收口、账本落盘、配置保存与清空、客户端 bundle 加载与
 slot 注册、apply 重入不重复计数）。真实宿主里也实测通过：热挂载后 `POST /dsh-token-feiyong/state`
 返回 200，`__DSH_BOOT__.entries` 含本插件，服务出的 `client.js` 与本地构建逐字节一致。
@@ -174,14 +174,15 @@ lib/index.js          宿主半边（Node，ESM，无 import）
 lib/client.js         浏览器半边（window.__ModuleLoader__ 工厂，require('react')）
 src/                  人类可读源码：两个动态包函数体
 scripts/build.mjs     定点变换 + 逐处断言
-scripts/check.mjs     72 项自检
+scripts/check.mjs     87 项自检
 ```
 
 与最初设计的差异（都是实测后修正的）：
 
-- **沙箱策略覆盖必须保留**：账本写在 `<DSH_HOME>`（工作区之外）、余额探测要联网，
-  两处都要按次请求 `danger-full-access`。最初以为真实插件不需要，实测报
-  `file access denied under workspace-write mode`。
+- **不能依赖按作用域提供的服务**：最初照搬了动态版对 `fs` / `credentials` / `shell` 的调用，
+  但插件挂在 profile 根级，看不见这些由 `dsh-fs-local` / `dsh-credentials-local` 按作用域
+  提供的服务——真实宿主里表现为徽标「存档异常 / fs 服务不可用」。现在账本走 `node:fs`、
+  余额走 `fetch`，凭据从 `<DSH_HOME>/.credentials.yaml` 的 `refs` 段读，不再需要这些服务。
 - **`apply` 必须可重入**：profile 的 `patchReload: live` 会让同一模块实例再次 `apply`，
   而 ESM 模块在进程内复用；原先 `loadStore` 会把账本聚合再并入一次（实测 `calls` 185 → 382）。
   现在 `apply` 先复位内存聚合。
@@ -213,7 +214,7 @@ screenshots.json      可选
 | 沙箱 RPC（仅 JSON 往返） | `POST` + `x-dsh-token-feiyong: 1` 头校验；非 POST 405、无头 403、坏 JSON 400 |
 | `ctx.get('settings')`、`ctx.get('fs')`、`ctx.get('credentials')`、`ctx.get('shell')` | **原样保留**（服务名与行为一致） |
 | `ctx.on('llm/stream')`、`ctx.on('agent/*')`、`ctx.on('api-session/status')` | **原样保留**（事件与作用域过滤一致） |
-| 按次沙箱策略覆盖（`danger-full-access`） | **保留**：账本在工作区外、余额探测要联网 |
+| `ctx.get('fs')` / `ctx.get('credentials')` / `ctx.get('shell')` | **换成** `node:fs` 与 `fetch`（根级插件看不到这些按作用域提供的服务） |
 | 模块级聚合一进到底 | 新增 `__resetState()`：`apply` 先复位内存聚合再读账本，热重载不重复计数 |
 
 客户端半边（`src/client.js` → `lib/client.js`）：
@@ -229,7 +230,7 @@ screenshots.json      可选
 
 ### 4.2 自测与实测结果
 
-`node scripts/check.mjs` —— **72 项全过**：
+`node scripts/check.mjs` —— **87 项全过**：
 
 1. 宿主 `apply` 后注册 5 条 exact 路由，且在 `ctx.effect` 内挂载（可注销）。
 2. 真起 HTTP 服务验证：`POST /state` 200、缺自定义头 403、GET 405、坏 JSON 400。
@@ -256,7 +257,7 @@ screenshots.json      可选
 
 前两步已完成（✅），现在只等仓库满 1 天就能提 PR。
 
-1. ✅ 完成移植，`node scripts/check.mjs` 72 项全过，`main` 已推到
+1. ✅ 完成移植，`node scripts/check.mjs` 87 项全过，`main` 已推到
    `github.com/singei8/DSH-TOKEN-feiyong`（commit `1932c1c`）。
 2. ✅ 打 tag `v1.1.0`、发 Release，资产名不带版本号：
    <https://github.com/singei8/DSH-TOKEN-feiyong/releases/latest/download/dsh-token-feiyong.tgz>

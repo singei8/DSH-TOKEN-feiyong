@@ -2,6 +2,38 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个版本对应一次 GitHub Release。
 
+## [1.1.1] — 2026-09-11
+
+修复真实宿主里徽标显示「存档异常」的问题。1.1.0 虽然把插件改成了真实插件包，
+但 I/O 层仍照搬动态沙箱的写法 —— 而那几个服务在根级插件里根本拿不到。
+
+### 修复
+
+- **「存档异常」/ `fs 服务不可用`**：`fs`、`credentials`、`shell` 是由 `dsh-fs-local`、
+  `dsh-credentials-local`、`dsh-shell` 等**按作用域**提供的服务，挂在 profile 根级的插件
+  `ctx.get(...)` 拿到的是 `undefined`（动态沙箱那份 ctx 由 runner 包装过，所以那时能用）。
+  现在账本改用 `node:fs` 直接读写 `<DSH_HOME>/token-billing-ledger.json`，
+  **路径与旧版一致，历史账本继续沿用**。
+- **余额**：不再起 PowerShell 子进程，改用 `fetch` 调 `/user/balance`（20 秒超时）；
+  凭据按 `env` → `credentials` 服务 → `<DSH_HOME>/.credentials.yaml` 的 `refs` 段依次尝试。
+  密钥只进请求头，不写日志、不下发前端。
+
+### 变更
+
+- `scripts/build.mjs` 不再生成宿主半边：`lib/index.js` 成为**直接维护的来源文件**
+  （真实插件要用 `node:fs`/`fetch` 并挂 HTTP 路由，无法从沙箱函数体变换得到）。
+  `src/host.js` 保留为动态包时代的历史参考，不再参与构建。
+- `scripts/check.mjs` 扩到 **87 项**：新增 `node:fs` 落盘（在临时 `DSH_HOME` 下）、
+  `fetch` 取余额（本地假端点，并校验 `Authorization` 确实来自 `.credentials.yaml`
+  的 `refs` 值而非其它字段），以及「宿主半边不得再向 ctx 索要 `fs`/`settings`/`shell`」
+  的回归守卫。
+
+### 实测
+
+真实宿主（DSH Desktop，`web` profile）验证通过：`store.error` 为空、`store.path` =
+`C:\Users\chen\.dsh\token-billing-ledger.json`、账本写入成功并读回历史（190 → 191/192 笔，
+无重复计数），余额 `via=fetch:file` 取回 **¥27.59 CNY**。
+
 ## [1.1.0] — 2026-09-11
 
 **从动态 Cordis 包改造成真实插件包**，安装方式随之改变（见 [INSTALL.md](INSTALL.md)）。
