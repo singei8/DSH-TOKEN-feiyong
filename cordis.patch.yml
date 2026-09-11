@@ -1,0 +1,30 @@
+# dsh bundle patch：把本插件插入 profile 的层叠配置。
+#
+# 这个文件是发布包 package.json 里 dsh.bundle.patch 指向的层。用官方 CLI 安装时
+#
+#   dsh plugin --profile web add dsh-token-feiyong
+#
+# 该命令会依据 dsh.profile.bundles 与已安装包做对账，看到这份声明就把
+# dsh-token-feiyong 追加进 bundle 栈；profile 启动时合并这条补丁（一行插入），
+# 与手工在 profile 的 cordis.patch.yml 里写一行挂载等价。不需要改 profile 文件。
+#
+# 若要改价格与时段，可在 config 里覆盖（缺省即用官方价目表，见 README）：
+#
+#   - insert:
+#       - id: dsh-token-feiyong
+#         name: 'dsh-token-feiyong'
+#         config:
+#           currency: '¥'
+#           utcOffsetMinutes: 480
+#           offPeakRatio: 0.5
+#           prices:
+#             default:
+#               cacheHit: 0.04
+#               cacheMiss: 2
+#               output: 8
+#               cacheHitOff: 0.02
+#               cacheMissOff: 1
+#               outputOff: 4
+- insert:
+    - id: dsh-token-feiyong
+      name: 'dsh-token-feiyong'

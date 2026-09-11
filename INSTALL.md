@@ -1,40 +1,82 @@
 # 安装说明
 
-本插件是 **DSH 动态 Cordis 插件**，**没有 exe / msi 安装包，也不需要编译**：
-`src/host.js` 与 `src/client.js` 的内容本身就是 `cordis_define` 参数的 `code.host` / `code.client`（函数体）。
-所以"安装"= 把这两段代码定义进你的 DSH，并激活它。
+本插件是**真实的 DSH 插件包**（npm 包形态，带 `dsh.bundle` 清单），不是动态 Cordis 包。
+仓库里已经包含构建产物 `lib/`，**安装不需要编译**。
+
+| 半边 | 文件 | 运行位置 |
+| --- | --- | --- |
+| 宿主 | `lib/index.js` | DSH 的 Node 进程（拦截模型调用、计费、余额、落盘） |
+| 客户端 | `lib/client.js` | 浏览器（输入框下方徽标 + 设置页「费用统计」） |
+| 构造 | `src/host.js` / `src/client.js` → `node scripts/build.mjs` | 改逻辑改 `src/`，重新构建 |
+| 自检 | `node scripts/check.mjs` | 72 项：计价 / 分时 / 收口 / 落盘 / slot 注册 / 重入 |
 
 ---
 
-## 方式一：让你的 DSH Agent 自己装（推荐，三步）
+## 方式一：插件市场（收录完成后，最省事）
 
-直接在 DSH 里对新会话说（可整段复制）：
+打开 **设置 → 插件市场**，搜索 `token`、`费用` 或 `billing`，点卡片上的安装按钮。
 
-> 请用 web_fetch 读取下面两个文件，把内容分别作为 `code.host` 和 `code.client` 调用 `cordis_define`，
-> 然后用 `cordis_run`（模式 `run`）激活，并把返回的 pluginId / packageId 告诉我：
->
-> - https://raw.githubusercontent.com/singei8/DSH-TOKEN-feiyong/main/src/host.js
-> - https://raw.githubusercontent.com/singei8/DSH-TOKEN-feiyong/main/src/client.js
->
-> 如果读取失败，我会直接把两个文件内容贴给你。
+市场会自己完成"加依赖 → 追加 bundle → 热挂载"整条链路，装完即用，不需要手动重启。
 
-Agent 会依次调用 `cordis_define` → `cordis_run`。**客户端半体需要你在界面里点一次"允许"**（一次性授权；勾双勾可授权该插件的后续版本）。
-
-网络不通时用方式二。
+> 收录状态见 [docs/PUBLISHING.md](docs/PUBLISHING.md)。条目合并进
+> [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+> 之后市场才能搜到；在那之前请用方式二。
 
 ---
 
-## 方式二：手动安装
+## 方式二：命令行安装
 
-1. 从 [Releases](https://github.com/singei8/DSH-TOKEN-feiyong/releases) 下载 `DSH-TOKEN-feiyong-v1.0.0.zip`，或 `git clone` 本仓库；
-2. 打开 `src/host.js` 与 `src/client.js`，**全文**复制；
-3. 在 DSH 中让 Agent 调用 `cordis_define`：
-   - `plugin`: `{ "kind": "new", "idPrefix": "tokbil" }`（前缀可自定，3–6 个小写字母；实际 ID 由宿主分配）
-   - `name`: `DSH-TOKEN-feiyong`
-   - `code.host`: `src/host.js` 全文
-   - `code.client`: `src/client.js` 全文
-4. 用返回的 `pluginId` / `packageId` 调用 `cordis_run`（模式 `run`）；
-5. 界面出现授权请求时点"允许"。
+`dsh plugin` 是 profile 目录里 pnpm 的封装：它装包，并按包内 `dsh.bundle.patch`
+声明的清单把包名追加进 profile 的 `dsh.profile.bundles`，profile 下次启动即挂载。
+
+```powershell
+# 从 npm（发布后可用）
+dsh plugin --profile web add dsh-token-feiyong
+
+# 从 GitHub 源码（仓库已含预构建 lib/，无需构建）
+dsh plugin --profile web add github:singei8/DSH-TOKEN-feiyong
+
+# 从本地克隆目录
+git clone https://github.com/singei8/DSH-TOKEN-feiyong
+dsh plugin --profile web add link:E:/path/to/DSH-TOKEN-feiyong
+```
+
+装完**重启 DSH**（新 bundle 在启动时进层叠配置）。
+
+---
+
+## 方式三：手动安装（完全可解释，等同方式二的产物）
+
+1. 在 profile 目录建好包链接（`~/.dsh/profiles/web`）：
+
+```powershell
+New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-token-feiyong" `
+  -Target "E:\path\to\DSH-TOKEN-feiyong"
+```
+
+2. 编辑 `~/.dsh/profiles/web/package.json`：`dependencies` 加一行
+   `"dsh-token-feiyong": "link:E:/path/to/DSH-TOKEN-feiyong"`，
+   并在 `dsh.profile.bundles` 数组末尾加 `"dsh-token-feiyong"`。
+
+3. 重启 DSH。
+
+> 也可以先跑 `pnpm install`，但 profile 里已有大量依赖，首次解析可能较慢；
+> 直接建 junction 等价于 `link:` 的产物，且不触碰依赖图。
+
+### 先不重启地验证（可选）
+
+`web` profile 的 `patchReload` 是 `live`：profile 自己的 `cordis.patch.yml` 会被监听并实时重组。
+临时在其中插入一行即可热挂载，不必重启：
+
+```yaml
+- insert:
+    - id: token-feiyong
+      name: 'dsh-token-feiyong'
+```
+
+⚠️ **验证完必须删掉这一行**：正式渠道（`dsh.profile.bundles`）会通过包自带的
+`cordis.patch.yml` 提供同一条 `insert`，两处同时存在会重复挂载同一个插件，
+`/dsh-token-feiyong/*` 路由会注册两次。
 
 ---
 
@@ -42,30 +84,40 @@ Agent 会依次调用 `cordis_define` → `cordis_run`。**客户端半体需要
 
 | 检查项 | 期望 |
 | --- | --- |
-| 输入框下方 | 出现徽标：`● 低谷 · 单次 ¥… · 本对话 ¥… · 今日 ¥… · 余额 ¥…` |
+| 输入框下方 | 徽标：`● 低谷 · 单次 ¥… · 本对话 ¥… · 今日 ¥… · 余额 ¥…` |
 | 设置页 | 左侧设置列表多出 **费用统计** |
-| 悬停徽标 | 显示单次/本对话/今日明细、余额拆分、高峰规则、存档状态 |
-| 首次调用后 | 生成存档文件 `<DSH_HOME>/token-billing-ledger.json`（通常 `~/.dsh/token-billing-ledger.json`） |
-| Host 日志 | 含 `[billing]` 前缀的行：`apply:` / `balance ok` / `store: ready` 等 |
+| 悬停徽标 | 单次 / 本对话 / 今日明细、余额拆分、高峰规则、存档状态 |
+| 页面启动清单 | 浏览器控制台执行 `__DSH_BOOT__.entries.some(e => e.id === 'dsh-token-feiyong')` → `true` |
+| 宿主路由 | `curl -X POST -H "x-dsh-token-feiyong: 1" http://127.0.0.1:3080/dsh-token-feiyong/state` → JSON 快照 |
+| 首次调用后 | 生成存档 `<DSH_HOME>/token-billing-ledger.json`（通常 `~/.dsh/token-billing-ledger.json`） |
+| Host 日志 | 含 `[billing]` 前缀的行：`apply:` / `http: mounted 5 routes` / `store: ready` |
+
+改过 `src/` 后跑一次 `node scripts/check.mjs`：它会真起一个 HTTP 服务把 5 条路由注册进去，
+用真实请求跑通记账、分时计价、单次收口、落盘、配置保存与清空，并校验客户端 bundle 的
+加载与 slot 注册。
 
 ---
 
 ## 前置条件与权限
 
-- **必需**：DSH（DeepSeek Harness）；宿主需提供 `slots`（客户端 UI）与 `llm`（拦截计费）。
-- **余额**：需要 `credentials`（凭据引用，默认 `DEEPSEEK_API_KEY`）、`shell`，以及能访问 `https://api.deepseek.com`。
-  工作区沙箱默认没有网络权限，插件会把这条**只读 GET** 以"非沙箱"方式执行（可在设置页关闭）。
-- **落盘**：需要 `fs` 与 `settings`（用于定位 DSH 主目录）。缺失时对应功能降级并给出提示，**不影响计费本身**。
-- 插件不发送任何遥测；API Key 只进子进程环境变量、不写日志、不下发前端。
+- **必需**：DSH（`web` profile）。宿主需提供 `webServer` 与 `fs` / `settings`；
+  客户端需提供 `slots`。缺失时对应功能降级并给出提示，不影响计费本身。
+- **落盘**：账本写在 `~/.dsh/` 下（**工作区之外**），因此写入时按次请求
+  `danger-full-access` 策略；否则会被默认的 `workspace-write` 挡下，
+  表现为存档报 `file access denied under workspace-write mode`。
+- **余额**：需要 `credentials`（默认引用 `DEEPSEEK_API_KEY`）、`shell`，以及能访问
+  `https://api.deepseek.com`。这条**只读 GET** 同样按次以非沙箱方式执行。
+- 插件不发送任何遥测；API Key 只进子进程环境变量，不写日志、不下发前端。
 
 ---
 
 ## 卸载
 
-1. 让 Agent 调用 `cordis_undefine`，传入安装时返回的 `pluginId`（或调用 `cordis_stop` 仅停用）；
-2. 如需彻底清除数据，删除 `<DSH_HOME>/token-billing-ledger.json`。
+- 市场里点卸载；或从 profile 的 `dependencies` 与 `dsh.profile.bundles` 里移除，
+  删掉 `node_modules/dsh-token-feiyong`，重启。
+- 想同时清空历史数据，删除 `<DSH_HOME>/token-billing-ledger.json`。
 
-停用或删除插件后，它对界面的所有占用（徽标、设置页、被遮蔽的入口）都会自动恢复。
+卸载或停用之后，徽标与设置项都会消失，`/dsh-token-feiyong/*` 路由随 fiber 一并注销。
 
 ---
 
@@ -73,17 +125,23 @@ Agent 会依次调用 `cordis_define` → `cordis_run`。**客户端半体需要
 
 ```powershell
 cd <你克隆的目录>
-git pull
+git pull          # lib/ 是提交进仓库的，不需要重新构建
 ```
 
-然后重复"方式一/方式二"的定义与激活步骤（每次都是新增一个不可变的 Package，旧版本仍可回滚）。
+然后重启 DSH。用 npm 安装的则等新版本发布后重新 `dsh plugin --profile web add dsh-token-feiyong@<版本>`。
 
 ---
 
 ## English quick start
 
-This is a **dynamic Cordis plugin for DSH** — there is no installer and no build step.
-`src/host.js` / `src/client.js` **are** the bodies of `cordis_define`'s `code.host` / `code.client`.
+A **real DSH plugin package** (npm shape with a `dsh.bundle` manifest), not a dynamic Cordis
+package. Prebuilt `lib/` ships in the repo, so **no build step is needed to install**.
 
-Fastest path: ask your DSH agent to `web_fetch` the two raw files and pass them to `cordis_define`,
-then activate with `cordis_run`. Approve the client half once in the UI.
+```powershell
+dsh plugin --profile web add github:singei8/DSH-TOKEN-feiyong
+```
+
+Then restart DSH. After catalog intake you can also install it from the in-app plugin market
+(search "token" / "billing"). Host half: `lib/index.js` (billing, balance, ledger over
+`/dsh-token-feiyong/*`). Client half: `lib/client.js` (composer badge + settings section).
+Rebuild with `node scripts/build.mjs`, self-test with `node scripts/check.mjs`.

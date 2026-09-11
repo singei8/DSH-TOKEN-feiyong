@@ -1,9 +1,45 @@
 {
   "name": "dsh-token-feiyong",
-  "version": "1.0.0",
-  "description": "DSH (DeepSeek Harness) 动�?Cordis 计费插件：按官方价目表统计每次调用的 token 费用、账户余额、单�?本对话花费，并持久化到本地�?,
+  "version": "1.1.0",
+  "description": "DSH（DeepSeek Harness）token 计费插件：按官方价目表逐笔计算花费（缓存命中 / 未命中 / 输出），高峰低谷分时计价，含账户余额、单次与本对话统计，数据本地持久化。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "lib",
+    "src",
+    "scripts",
+    "docs",
+    "examples",
+    "cordis.patch.yml",
+    "README.md",
+    "INSTALL.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check.mjs"
+  },
   "keywords": [
     "dsh",
+    "dsh-plugin",
     "deepseek-harness",
     "cordis",
     "plugin",
@@ -14,14 +50,6 @@
     "cache"
   ],
   "license": "MIT",
-  "private": false,
-  "files": [
-    "src",
-    "docs",
-    "examples",
-    "README.md",
-    "LICENSE"
-  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/singei8/DSH-TOKEN-feiyong.git"
@@ -29,9 +57,5 @@
   "homepage": "https://github.com/singei8/DSH-TOKEN-feiyong#readme",
   "bugs": {
     "url": "https://github.com/singei8/DSH-TOKEN-feiyong/issues"
-  },
-  "scripts": {},
-  "engines": {
-    "node": ">=20"
   }
 }

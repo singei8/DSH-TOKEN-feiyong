@@ -1,15 +1,22 @@
 # DSH-TOKEN-feiyong
 
-> DeepSeek Harness 的 **token 计费 / 费用统计** 动态 Cordis 插件。
+> DeepSeek Harness 的 **token 计费 / 费用统计** 插件。
 > 按官方价目表逐笔计算每次模型调用的花费，显示账户余额，并把账本与配置持久化到本地。
 
 一句话：**把「这次调用花了多少钱」算清楚，并记住它。**
 
 **下载 / 安装**：[最新版本 Releases](https://github.com/singei8/DSH-TOKEN-feiyong/releases/latest) ·
-安装步骤（含"一句话让 Agent 自己装"）见 [INSTALL.md](INSTALL.md) · 版本记录见 [CHANGELOG.md](CHANGELOG.md)
+安装步骤见 [INSTALL.md](INSTALL.md) · 版本记录见 [CHANGELOG.md](CHANGELOG.md) ·
+收录与发布设计见 [docs/PUBLISHING.md](docs/PUBLISHING.md)
 
-> 本项目**没有 exe / msi 安装包，也不需要编译**：`src/host.js` 与 `src/client.js` 的内容本身就是
-> `cordis_define` 参数的 `code.host` / `code.client`。"安装"= 把这两段代码定义进你的 DSH 并激活。
+> 这是一个**真实的 DSH 插件包**（npm 包形态，带 `dsh.bundle` 清单），不是动态 Cordis 包。
+> 仓库已含预构建的 `lib/`，**安装不需要编译**：
+>
+> ```powershell
+> dsh plugin --profile web add github:singei8/DSH-TOKEN-feiyong
+> ```
+>
+> 然后重启 DSH。收录进官方目录后，也能在 **设置 → 插件市场** 里搜到并一键安装。
 
 ---
 
@@ -40,16 +47,33 @@
 
 ## 安装（在 DSH 里启用）
 
-本插件是 **动态 Cordis 包**：`src/host.js` 与 `src/client.js` 的内容就是 `cordis_define` 参数的 `code.host` / `code.client` **函数体本身**（不是可独立运行的模块，没有 `import`/`export`）。
+本插件是**真实插件包**，由两半组成：宿主半边 `lib/index.js`（Node 进程里记账、探测余额、落盘），
+客户端半边 `lib/client.js`（浏览器里的徽标与设置页）。两半通过 `/dsh-token-feiyong/*` 的 HTTP 路由通信。
 
-1. 打开 DSH，让 Agent 加载 `cordis-plugin-development` 技能；
-2. 让 Agent（或你自己）把 `src/host.js` 全文作为 `code.host`、`src/client.js` 全文作为 `code.client` 调用 `cordis_define`；
-3. 用返回的 `pluginId` / `packageId` 调用 `cordis_run` 激活；
-4. 在界面里批准客户端半体（Client 半体需要一次授权）。
+```powershell
+# 三种渠道任选其一
+dsh plugin --profile web add github:singei8/DSH-TOKEN-feiyong   # GitHub 源码
+dsh plugin --profile web add dsh-token-feiyong                  # npm（发布后）
+dsh plugin --profile web add link:E:/path/to/DSH-TOKEN-feiyong   # 本地克隆目录
+```
 
-> 也可以把两个文件内容直接贴给 Agent，让它「按这两个文件定义并运行一个 Cordis 插件」。
+`dsh plugin` = profile 目录里 pnpm 的封装：装包之后，它会读包内的 `dsh.bundle.patch` 清单，
+把包名追加进 profile 的 `dsh.profile.bundles`。**装完重启 DSH**，插件随启动挂载。
 
-插件对宿主能力是**可选依赖**：`llm`、`credentials`、`shell`、`fs`、`settings` 任一缺失时，对应功能降级并在界面上说明，不会让整个插件挂掉。
+收录进 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 之后，
+也可以在 **设置 → 插件市场** 里搜索（`token` / `billing` / `费用`）一键安装，那条路径会热挂载、无需重启。
+
+> 详细步骤、手动安装（不依赖 pnpm）、不重启的热挂载验证方法、卸载与更新，
+> 以及验证清单都在 [INSTALL.md](INSTALL.md)。
+
+源码在 `src/`，构建产物在 `lib/`（两者都提交进仓库，所以安装方无需构建）：
+
+```powershell
+node scripts/build.mjs   # src/host.js -> lib/index.js，src/client.js -> lib/client.js
+node scripts/check.mjs   # 自检：真起 HTTP 服务跑通记账、分时计价、收口、落盘、slot 注册、重入
+```
+
+插件对宿主能力是**可选依赖**：`webServer`、`llm`、`credentials`、`shell`、`fs`、`settings` 任一缺失时，对应功能降级并在界面上说明，不会让整个插件挂掉。
 
 ---
 
@@ -131,7 +155,7 @@ A：设置页顶部会出现红色告警条，徽标上也会出现「存档异�
 A：本插件算的是「按列表价推得的理论费用」，用来对齐量级与趋势。官方实际扣费还涉及赠金优先抵扣等规则。
 
 **Q：怎么改插件名？**
-A：仓库名即项目名；插件在 DSH 里的显示名由 `cordis_define` 的 `name` 参数决定（可在下一次定义时改为 `DSH-TOKEN-feiyong`）。
+A：仓库名即项目名；插件在 DSH 里的显示名由 `lib/index.js` 的 `export const name` 与 `cordis.patch.yml` 里的行 `name` 决定，两处一致即可。
 
 ---
 
@@ -139,17 +163,25 @@ A：仓库名即项目名；插件在 DSH 里的显示名由 `cordis_define` 的
 
 ```
 DSH-TOKEN-feiyong/
+├─ lib/                         # 构建产物（提交进仓库，安装方无需构建）
+│  ├─ index.js                  # 宿主半边：出口 name / apply(ctx, rowConfig)
+│  └─ client.js                 # 客户端半边：__ModuleLoader__ 工厂，导出 name/inject/apply
 ├─ src/
-│  ├─ host.js                  # Host 半体（计费 / 余额 / 落盘）— cordis_define 的 code.host
-│  └─ client.js                # Client 半体（设置页 + 徽标）— cordis_define 的 code.client
+│  ├─ host.js                   # 宿主半边源码（由 scripts/build.mjs 生成 lib/index.js）
+│  └─ client.js                 # 客户端半边源码（由 scripts/build.mjs 生成 lib/client.js）
+├─ scripts/
+│  ├─ build.mjs                 # 定点变换 + 断言：src/*.js -> lib/*.js
+│  └─ check.mjs                 # 自检 72 项：真起 HTTP 服务跑通路由、记账、分时、落盘、slot
+├─ cordis.patch.yml             # dsh.bundle.patch：把本插件插入 profile 的层叠配置
 ├─ docs/
-│  └─ billing-explained.html   # 「本对话」计费逻辑可视化：流程图 / 公式 / 逐笔回放 / 计算器
+│  ├─ billing-explained.html    # 「本对话」计费逻辑可视化：流程图 / 公式 / 逐笔回放 / 计算器
+│  └─ PUBLISHING.md             # 官方收录方式与发布设计（awesome-dsh-plugin）
 ├─ examples/
-│  └─ ledger.sample.json       # 本地存档格式示例
-├─ INSTALL.md                  # 安装 / 验证 / 卸载 / 更新说明
-├─ CHANGELOG.md                # 版本记录
-├─ LICENSE                     # MIT
-└─ package.json
+│  └─ ledger.sample.json        # 本地存档格式示例
+├─ INSTALL.md                   # 安装 / 验证 / 卸载 / 更新说明
+├─ CHANGELOG.md                 # 版本记录
+├─ LICENSE                      # MIT
+└─ package.json                 # 含 dsh.bundle / dsh.client 清单与 exports
 ```
 
 ---
@@ -162,7 +194,7 @@ DSH-TOKEN-feiyong/
 
 ## English summary
 
-**DSH-TOKEN-feiyong** is a billing/cost-stats plugin for [DeepSeek Harness](https://github.com/deepseek-harness) (DSH), packaged as a dynamic Cordis plugin.
+**DSH-TOKEN-feiyong** is a billing/cost-stats plugin for [DeepSeek Harness](https://github.com/deepseek-harness) (DSH), packaged as a regular DSH plugin bundle.
 
 - Hooks the `llm/stream` waterfall, reads provider-reported `TokenUsage`, and prices each call with per-million-token rates split into **cache-hit input / cache-miss input / output**.
 - Applies the official DeepSeek peak/off-peak rule (peak = Mon–Fri 09:00–12:00 & 14:00–18:00 Beijing time; off-peak is half price).
@@ -170,4 +202,7 @@ DSH-TOKEN-feiyong/
 - Persists the ledger, aggregates and configuration to `<DSH_HOME>/token-billing-ledger.json` and merges it back on restart, so totals never regress.
 - Everything is local. The API key is never written to logs, never passed on a command line, and never sent to the browser.
 
-`src/host.js` and `src/client.js` are the **bodies** passed to `cordis_define`'s `code.host` / `code.client`.
+Install with `dsh plugin --profile web add github:singei8/DSH-TOKEN-feiyong`, then restart DSH.
+Host half `lib/index.js` serves `/dsh-token-feiyong/*`; client half `lib/client.js` registers the
+composer badge and the settings section. `src/` is the source, `lib/` is the committed build
+(`node scripts/build.mjs`), and `node scripts/check.mjs` runs the 72-check self-test.

@@ -3,6 +3,9 @@ node_modules/
 dist/
 build/
 
+# 发布产物：.tgz 挂到 GitHub Release 上，不进仓库（lib/ 是提交的，见下）
+*.tgz
+
 # logs
 *.log
 npm-debug.log*

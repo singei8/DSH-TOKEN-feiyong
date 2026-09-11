@@ -2,6 +2,44 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个版本对应一次 GitHub Release。
 
+## [1.1.0] — 2026-09-11
+
+**从动态 Cordis 包改造成真实插件包**，安装方式随之改变（见 [INSTALL.md](INSTALL.md)）。
+计费口径、价目表与界面行为与 1.0.0 一致。
+
+### 变更
+
+- **改为真实插件包**：`src/host.js` / `src/client.js` 仍是人类可读的源码，`scripts/build.mjs`
+  把它们定点变换成 `lib/index.js`（宿主半边，`export name` / `export apply(ctx, rowConfig)`）
+  与 `lib/client.js`（客户端半边，`window.__ModuleLoader__` 工厂，导出 `name` / `inject` / `apply`）。
+  两者都提交进仓库，安装方无需构建。
+- **宿主↔客户端通信换成 HTTP 路由**：5 个 `harness.handle('billing/*')` 方法改为
+  `webServer` 上的 `POST /dsh-token-feiyong/{state,save,store,balance,reset}`，由 `ctx.effect` 注销；
+  请求必须带 `x-dsh-token-feiyong: 1` 头（跨源页面无法在无预检的情况下伪造），非 POST 返回 405。
+- **`styles.insert` 换成自建 `<style>` 注入**，交 `ctx.effect` 托管（真实插件没有沙箱提供的
+  `styles` 对象）。
+- **移除**冒充 `sidebar.footer.action` 的 `cordis-panel` 注册：那只是动态包用来隐藏侧边栏底部
+  "Cordis Plugin" 行的手段；真实插件没有那一行，留着反而会挡掉 Cordis 自己的审批 UI。
+- **移除**设置页的「余额请求：沙箱 / 非沙箱」开关（仅动态沙箱语境下有意义）。
+
+### 修复
+
+- **重复计数**：`apply` 会在不重启进程的情况下被再次执行（profile 的 `patchReload: live`），
+  而 ESM 模块实例在进程内复用——原先 `loadStore` 会把账本聚合再次并入已在内存的聚合。
+  实测在真实宿主里 `calls` 从 185 涨到 382。现在 `apply` 先复位内存聚合再读账本。
+- **存档写入被沙箱拒绝**：账本位于 `<DSH_HOME>`（工作区之外），写入与余额探测都必须按次请求
+  `danger-full-access` 策略，否则报 `file access denied under workspace-write mode`。
+
+### 新增
+
+- `cordis.patch.yml`：`dsh.bundle.patch` 清单，`dsh plugin add` 据此把本插件追加进
+  `dsh.profile.bundles`。
+- `package.json` 补齐 `type` / `main` / `exports` / `dsh.bundle` / `dsh.client.platform` 清单。
+- `scripts/check.mjs`：**72 项自检**。真起一个 HTTP 服务注册 5 条路由，用真实请求跑通
+  记账、高峰/低谷单价（含周末判档）、单次收口、账本落盘、配置保存与清空，并校验客户端 bundle
+  的加载、`ctx.effect` 样式托管、两个 slot 的注册与「不再冒充 cordis-panel」。
+- `docs/PUBLISHING.md`：官方收录方式（awesome-dsh-plugin）与发布设计。
+
 ## [1.0.0] — 2026-09-11
 
 首个公开版本。
