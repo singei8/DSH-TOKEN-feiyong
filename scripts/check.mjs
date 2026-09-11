@@ -418,6 +418,87 @@ eq(bySlot.get('conversation.composer.dock').id, 'token-billing', 'composer dock 
 ok(!bySlot.has('sidebar.footer.action'), 'does not shadow sidebar.footer.action')
 ok(registrations.every((item) => typeof item.Component === 'function'), 'all registrations pass a component')
 
+/* ---------------- 功能性回归：徽标必须自己轮询 ---------------- */
+
+// 真实客户端的启动清单里没有 timer 模块（已核实），ctx.get('timer') 为 undefined。
+// 最初 useBilling 只在 timer 服务存在时才轮询，于是徽标只渲染挂载那一帧——那时余额
+// 还在异步获取中，永远显示「…」，而设置页因为会再次拉取所以正常。
+// 这里用只实现 useState/useEffect 的迷你 React 真跑一遍 BillingMeter 的 effect。
+ok(source.includes('window.setInterval(tick, intervalMs)'), 'bundle has the window.setInterval fallback')
+
+const hookStates = []
+let hookCursor = 0
+const miniEffects = []
+const miniReact = {
+  createElement(type, props, ...children) { return { type, props, children } },
+  useState(initial) {
+    const index = hookCursor++
+    if (!(index in hookStates)) hookStates[index] = typeof initial === 'function' ? initial() : initial
+    return [hookStates[index], (next) => { hookStates[index] = next }]
+  },
+  useEffect(callback) { miniEffects.push(callback) },
+}
+
+let loaded2 = null
+const intervals = []
+let intervalClears = 0
+const windowStub2 = {
+  __ModuleLoader__: { load(spec) { loaded2 = spec } },
+  setInterval(callback, ms) { intervals.push({ callback, ms }); return 4242 },
+  clearInterval(handle) { intervalClears += 1; void handle },
+}
+// eslint-disable-next-line no-new-func
+new Function('window', 'document', 'URL', source)(windowStub2, documentStub, URL)
+
+const requireStub2 = (name) => {
+  if (name === 'react') return miniReact
+  throw new Error('unexpected require: ' + name)
+}
+const clientModule2 = loaded2.factory(requireStub2)
+const registrations2 = []
+const slotsStub2 = {
+  inject(name, callback) { callback() },
+  register(spec, Component) { registrations2.push({ spec, Component }); return () => {} },
+}
+clientModule2.apply({
+  get: (name) => (name === 'slots' ? slotsStub2 : undefined),
+  effect(callback) { callback() },
+})
+
+const meter = registrations2.find((item) => item.spec.name === 'conversation.composer.dock')?.Component
+ok(typeof meter === 'function', 'composer badge component found')
+miniEffects.length = 0
+hookCursor = 0
+
+const realFetch = globalThis.fetch
+let pulled = 0
+globalThis.fetch = async () => {
+  pulled += 1
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ config: { enabled: true }, phase: { offPeak: true }, balance: { ok: false }, store: {}, totals: {} }),
+  }
+}
+
+meter({ sessionId: 's-test' })
+eq(miniEffects.length, 1, 'badge registers exactly one effect')
+const cleanup = miniEffects[0]()
+eq(intervals.length, 1, 'badge starts its own polling without the timer service')
+eq(intervals[0].ms, 3000, 'badge polls every 3000ms')
+eq(pulled, 1, 'badge pulled a snapshot immediately on mount')
+
+// 轮询回调真的会再拉取
+intervals[0].callback()
+await new Promise((resolve) => setTimeout(resolve, 0))
+eq(pulled, 2, 'polling callback pulls again')
+
+ok(typeof cleanup === 'function', 'effect returns a disposer')
+cleanup()
+eq(intervalClears, 1, 'disposer clears the interval')
+
+globalThis.fetch = realFetch
+
 rmSync(home, { recursive: true, force: true })
 
 console.log('\n' + String(passed) + ' checks passed\n')

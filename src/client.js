@@ -267,6 +267,14 @@ return {
         if (timerService !== undefined && timerService !== null && typeof timerService.interval === 'function') {
           try { dispose = timerService.interval(tick, intervalMs) } catch (error) { dispose = null }
         }
+        /* 没有 timer 服务时退回浏览器定时器。
+           真实客户端的组合里并不保证有 timer（启动清单里就没有），而这里只拉一次的话，
+           徽标会永远停在挂载那一帧——那时余额还在异步获取中，于是永远是「…」，
+           而设置页因为会再次拉取所以能显示。 */
+        if (dispose === null && typeof window !== 'undefined' && typeof window.setInterval === 'function') {
+          const handle = window.setInterval(tick, intervalMs)
+          dispose = function () { window.clearInterval(handle) }
+        }
         return function () {
           alive = false
           if (typeof dispose === 'function') {
