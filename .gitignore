@@ -1,0 +1,18 @@
+# dependencies / build
+node_modules/
+dist/
+build/
+
+# logs
+*.log
+npm-debug.log*
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# local scratch
+_extract/
+*.local.json

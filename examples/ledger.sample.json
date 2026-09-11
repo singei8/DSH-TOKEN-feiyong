@@ -1,0 +1,227 @@
+{
+  "version": 3,
+  "savedAt": 1767225600000,
+  "config": {
+    "enabled": true,
+    "persist": true,
+    "currency": "¥",
+    "utcOffsetMinutes": 480,
+    "peakDays": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "peakWindows": [
+      {
+        "start": "09:00",
+        "end": "12:00"
+      },
+      {
+        "start": "14:00",
+        "end": "18:00"
+      }
+    ],
+    "offPeakRatio": 0.5,
+    "showBalance": true,
+    "unconfinedBalance": true,
+    "credentialRef": "DEEPSEEK_API_KEY",
+    "balanceUrl": "https://api.deepseek.com/user/balance",
+    "prices": {
+      "default": {
+        "cacheHit": 0.04,
+        "cacheMiss": 2,
+        "output": 8,
+        "cacheHitOff": 0.02,
+        "cacheMissOff": 1,
+        "outputOff": 4
+      },
+      "deepseek-official/deepseek-v4-pro": {
+        "cacheHit": 0.3,
+        "cacheMiss": 9,
+        "output": 27,
+        "cacheHitOff": 0.15,
+        "cacheMissOff": 4.5,
+        "outputOff": 13.5
+      }
+    }
+  },
+  "counter": 6,
+  "totals": {
+    "calls": 6,
+    "cost": 0.27117916000000003,
+    "hit": 401920,
+    "miss": 100990,
+    "write": 0,
+    "out": 9620,
+    "offPeakCalls": 3
+  },
+  "byModel": {
+    "deepseek-official/deepseek-flash": {
+      "calls": 4,
+      "cost": 0.14531776,
+      "hit": 340224,
+      "miss": 99490,
+      "write": 0,
+      "out": 5810,
+      "offPeakCalls": 2
+    },
+    "deepseek-official/deepseek-v4-pro": {
+      "calls": 2,
+      "cost": 0.1258614,
+      "hit": 61696,
+      "miss": 1500,
+      "write": 0,
+      "out": 3810,
+      "offPeakCalls": 1
+    }
+  },
+  "byDay": {
+    "2026-01-01": {
+      "calls": 6,
+      "cost": 0.27117916000000003,
+      "hit": 401920,
+      "miss": 100990,
+      "write": 0,
+      "out": 9620,
+      "offPeakCalls": 3
+    }
+  },
+  "bySession": {
+    "session-demo-0000": {
+      "calls": 6,
+      "cost": 0.27117916000000003,
+      "hit": 401920,
+      "miss": 100990,
+      "write": 0,
+      "out": 9620,
+      "offPeakCalls": 3
+    }
+  },
+  "lastTurns": {
+    "session-demo-0000": {
+      "at": 1767225960000,
+      "turn": 3,
+      "bucket": {
+        "calls": 6,
+        "cost": 0.27117916000000003,
+        "hit": 401920,
+        "miss": 100990,
+        "write": 0,
+        "out": 9620,
+        "offPeakCalls": 3
+      }
+    }
+  },
+  "rows": [
+    {
+      "seq": 1,
+      "ts": 1767225660000,
+      "day": "2026-01-01",
+      "time": "01-01 10:12:03",
+      "provider": "deepseek-official",
+      "model": "deepseek-flash",
+      "key": "deepseek-official/deepseek-flash",
+      "sessionId": "session-demo-0000",
+      "purpose": null,
+      "hit": 120064,
+      "miss": 820,
+      "write": 0,
+      "out": 1450,
+      "reasoning": 0,
+      "offPeak": false,
+      "cost": 0.01804256
+    },
+    {
+      "seq": 2,
+      "ts": 1767225720000,
+      "day": "2026-01-01",
+      "time": "01-01 10:13:20",
+      "provider": "deepseek-official",
+      "model": "deepseek-flash",
+      "key": "deepseek-official/deepseek-flash",
+      "sessionId": "session-demo-0000",
+      "purpose": null,
+      "hit": 121600,
+      "miss": 410,
+      "write": 0,
+      "out": 980,
+      "reasoning": 0,
+      "offPeak": false,
+      "cost": 0.013524
+    },
+    {
+      "seq": 3,
+      "ts": 1767225780000,
+      "day": "2026-01-01",
+      "time": "01-01 12:30:11",
+      "provider": "deepseek-official",
+      "model": "deepseek-flash",
+      "key": "deepseek-official/deepseek-flash",
+      "sessionId": "session-demo-0000",
+      "purpose": null,
+      "hit": 0,
+      "miss": 98000,
+      "write": 0,
+      "out": 2200,
+      "reasoning": 0,
+      "offPeak": true,
+      "cost": 0.1068
+    },
+    {
+      "seq": 4,
+      "ts": 1767225840000,
+      "day": "2026-01-01",
+      "time": "01-01 12:31:02",
+      "provider": "deepseek-official",
+      "model": "deepseek-flash",
+      "key": "deepseek-official/deepseek-flash",
+      "sessionId": "session-demo-0000",
+      "purpose": null,
+      "hit": 98560,
+      "miss": 260,
+      "write": 0,
+      "out": 1180,
+      "reasoning": 0,
+      "offPeak": true,
+      "cost": 0.0069512
+    },
+    {
+      "seq": 5,
+      "ts": 1767225900000,
+      "day": "2026-01-01",
+      "time": "01-01 15:04:44",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-pro",
+      "key": "deepseek-official/deepseek-v4-pro",
+      "sessionId": "session-demo-0000",
+      "purpose": null,
+      "hit": 20480,
+      "miss": 1500,
+      "write": 0,
+      "out": 3600,
+      "reasoning": 0,
+      "offPeak": false,
+      "cost": 0.116844
+    },
+    {
+      "seq": 6,
+      "ts": 1767225960000,
+      "day": "2026-01-01",
+      "time": "01-01 22:41:09",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-pro",
+      "key": "deepseek-official/deepseek-v4-pro",
+      "sessionId": "session-demo-0000",
+      "purpose": null,
+      "hit": 41216,
+      "miss": 0,
+      "write": 0,
+      "out": 210,
+      "reasoning": 0,
+      "offPeak": true,
+      "cost": 0.0090174
+    }
+  ]
+}

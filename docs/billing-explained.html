@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本对话计费逻辑 · 费用统计</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2b303b;
+    --fg:#e8eaf0; --muted:#9aa3b2; --dim:#6b7280;
+    --red:#ff6b6b; --green:#4ade80; --blue:#60a5fa; --amber:#fbbf24; --violet:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:22px;margin:0 0 6px}
+  h2{font-size:16px;margin:34px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:14px;margin:18px 0 8px;color:var(--muted);font-weight:600}
+  .sub{color:var(--muted);font-size:12px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .panel + .panel{margin-top:12px}
+  .lead{font-size:15px}
+  .kbd{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12px}
+  .grid{display:grid;gap:12px}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  .g4{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat .t{font-size:12px;color:var(--muted)}
+  .stat .v{font-size:20px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+  .stat .s{font-size:11px;color:var(--dim);margin-top:2px}
+  /* flow */
+  .flow{display:flex;flex-direction:column;gap:0}
+  .step{display:flex;gap:12px;align-items:flex-start}
+  .step .n{flex:0 0 26px;height:26px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted)}
+  .step .b{flex:1;padding-bottom:4px}
+  .step .b b{font-weight:600}
+  .step .b p{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+  .arrow{margin-left:12px;height:14px;border-left:1px dashed var(--line)}
+  .tag{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--line);
+    font-size:11px;color:var(--muted);margin-left:6px}
+  .tag.red{color:var(--red);border-color:var(--red)}
+  .tag.green{color:var(--green);border-color:var(--green)}
+  .tag.blue{color:var(--blue);border-color:var(--blue)}
+  .tag.amber{color:var(--amber);border-color:var(--amber)}
+  /* formula */
+  .formula{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    font-family:ui-monospace,Consolas,monospace;font-size:13px;line-height:2;overflow-x:auto}
+  .formula .c1{color:var(--green)} .formula .c2{color:var(--blue)}
+  .formula .c3{color:var(--amber)} .formula .c4{color:var(--violet)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+  th{color:var(--muted);font-weight:500;position:sticky;top:0;background:var(--panel)}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr.total td{border-top:1px solid var(--line);border-bottom:none;font-weight:700}
+  .scroll{max-height:380px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  .ok{color:var(--green)} .bad{color:var(--red)} .muted{color:var(--muted)}
+  .bar{display:flex;height:26px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+  .bar span{display:flex;align-items:center;justify-content:center;font-size:11px;color:#0b0d11;font-weight:700;
+    white-space:nowrap;overflow:hidden}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--muted)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  /* calculator */
+  .calc{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.calc{grid-template-columns:1fr}}
+  label.f{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)}
+  input,select{background:#0b0d11;border:1px solid var(--line);color:var(--fg);border-radius:7px;
+    padding:7px 9px;font-size:13px;font-family:inherit;width:100%}
+  input:focus,select:focus{outline:none;border-color:var(--blue)}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .note{color:var(--muted);font-size:12.5px}
+  ul{margin:6px 0 0;padding-left:20px;color:var(--muted);font-size:12.5px}
+  li{margin:3px 0}
+  .hl{color:var(--fg);font-weight:600}
+  .pill{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:999px;
+    padding:2px 10px;font-size:11.5px;color:var(--muted);margin-right:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>本对话是怎么算钱的</h1>
+  <div class="sub">
+    会话 <span class="mono" id="sid"></span> · 数据取自 DSH 费用统计插件本机存档 ·
+    生成于 <span id="gen"></span>
+  </div>
+
+  <div class="panel" style="margin-top:16px">
+    <p class="lead" style="margin:0">
+      <b>一句话：</b>「本对话」= 这一个会话里，<b>每一次模型调用的费用之和</b>。
+      每次调用的费用 = 三类 token 各乘自己的单价再相加，而单价取决于
+      <b>用的是哪个模型档位</b> 和 <b>这次调用发生在高峰还是低谷</b>。
+    </p>
+  </div>
+
+  <div class="grid g4" style="margin-top:12px">
+    <div class="stat"><div class="t">本对话总费用</div><div class="v" id="s-cost"></div><div class="s" id="s-calls"></div></div>
+    <div class="stat"><div class="t">输入·缓存命中</div><div class="v" id="s-hit"></div><div class="s" id="s-hit-rate"></div></div>
+    <div class="stat"><div class="t">输入·缓存未命中</div><div class="v" id="s-miss"></div><div class="s">单价按未命中档</div></div>
+    <div class="stat"><div class="t">输出</div><div class="v" id="s-out"></div><div class="s">含思考 token</div></div>
+  </div>
+
+  <h2>一、计算流程</h2>
+  <div class="panel">
+    <div class="flow" id="flow"></div>
+  </div>
+
+  <h2>二、公式</h2>
+  <div class="panel">
+    <div class="formula">
+      <div><b>单次调用费用</b> = ( <span class="c1">命中输入 tokens</span> × <span class="c1">命中单价</span>
+        + (<span class="c2">未命中输入 tokens</span> + <span class="c3">缓存写入 tokens</span>) × <span class="c2">未命中单价</span>
+        + <span class="c4">输出 tokens</span> × <span class="c4">输出单价</span> ) ÷ 1,000,000</div>
+      <div style="color:var(--muted);font-size:12px">
+        单价单位：元 / 百万 tokens。若该次调用落在低谷，三个单价各自替换为低谷价（本项目里低谷 = 高峰的一半，来自官方规则）。
+      </div>
+      <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
+        <b>本对话总费用</b> = Σ 单次调用费用 &nbsp;<span style="color:var(--muted)">（同一 sessionId 的全部调用）</span>
+      </div>
+    </div>
+    <h3>四个 token 计数的来源（互不重叠）</h3>
+    <ul>
+      <li><span class="hl">命中输入</span> = <span class="mono">usage.cacheReadTokens</span>　—— 命中上下文硬盘缓存、按缓存价计费的部分</li>
+      <li><span class="hl">未命中输入</span> = <span class="mono">usage.inputTokens</span>　—— <b>已经剔除命中部分</b>，所以两者相加才是完整 prompt</li>
+      <li><span class="hl">缓存写入</span> = <span class="mono">usage.cacheWriteTokens</span>　—— DeepSeek 目前恒为 0，仍按未命中单价兜底</li>
+      <li><span class="hl">输出</span> = <span class="mono">usage.outputTokens</span>　—— 已包含 <span class="mono">reasoningTokens</span>，不重复计</li>
+    </ul>
+  </div>
+
+  <h2>三、单价来自哪里</h2>
+  <div class="panel">
+    <h3 style="margin-top:0">档位（按 provider/model 精确匹配 → 模型名 → 默认档）</h3>
+    <div class="scroll" style="max-height:none">
+      <table id="tier-table"></table>
+    </div>
+    <h3>高峰 / 低谷（官方规则，按调用发生的时刻判定）</h3>
+    <p class="note" style="margin:4px 0 0">
+      高峰 = 北京时间 <b id="peak-days"></b> 的 <b id="peak-win"></b>；
+      其余时间（含周末全天、午休、夜间）都是低谷。低谷单价 = 高峰的一半。
+    </p>
+  </div>
+
+  <h2>四、你这个会话的真实回放</h2>
+  <div class="panel">
+    <p class="note" style="margin:0 0 10px">
+      下表每一行的费用都由页面用上面的公式<b>重新算了一遍</b>，并与账本记录值对比：
+      <span id="verify" class="ok"></span>
+    </p>
+    <div class="scroll"><table id="rows"></table></div>
+
+    <h3>费用构成（按钱，不按 token）</h3>
+    <div class="bar" id="bar"></div>
+    <div class="legend" id="legend"></div>
+    <p class="note" id="insight" style="margin-top:12px"></p>
+  </div>
+
+  <h2>五、自己试一下（计算器）</h2>
+  <div class="panel">
+    <div class="calc">
+      <div class="grid" style="gap:10px">
+        <div class="row">
+          <label class="f">档位
+            <select id="c-tier"></select>
+          </label>
+          <label class="f">时段
+            <select id="c-when">
+              <option value="auto">自动（按当前北京时间判断）</option>
+              <option value="peak">高峰</option>
+              <option value="off">低谷</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label class="f">命中输入 tokens<input id="c-hit" type="number" min="0" step="1"></label>
+          <label class="f">未命中输入 tokens<input id="c-miss" type="number" min="0" step="1"></label>
+        </div>
+        <div class="row">
+          <label class="f">缓存写入 tokens<input id="c-write" type="number" min="0" step="1"></label>
+          <label class="f">输出 tokens<input id="c-out" type="number" min="0" step="1"></label>
+        </div>
+        <div class="note" id="c-now"></div>
+      </div>
+      <div>
+        <div class="stat" style="border-color:var(--blue)">
+          <div class="t">这次调用费用</div>
+          <div class="v" id="c-result" style="font-size:26px"></div>
+          <div class="s" id="c-unit"></div>
+        </div>
+        <div class="formula" id="c-steps" style="margin-top:12px;font-size:12px"></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>六、口径与边界</h2>
+  <div class="panel">
+    <ul>
+      <li><b>包含</b>：该会话下的每一次模型调用（含多步工具轮、自动重试、上下文压缩等辅助调用）。</li>
+      <li><b>不包含</b>：子代理（subagent）——它是另一个会话，单独累计；失败的调用（没有 usage 上报就没法计费）。</li>
+      <li><b>时间口径</b>：高峰/低谷按<b>每次调用发生的时刻</b>分别判定，同一次提问跨越 12:00 时，前后两笔可能一个高峰一个低谷。</li>
+      <li><b>数据来源</b>：DSH 费用统计插件在 <span class="mono">llm/stream</span> 拦截每次调用取 <span class="mono">TokenUsage</span>，
+        累加到 <span class="mono">bySession[sessionId]</span>，并写入本机存档 <span class="mono" id="store-path"></span>。</li>
+      <li><b>与官方账单对账</b>：这里算的是「按列表价推得的理论费用」，可用来对齐量级与趋势；
+        官方实际扣费还涉及赠金优先抵扣等规则。</li>
+      <li><b>单次 vs 本对话</b>：状态栏徽标上的「单次」是<b>上一轮提问</b>（从发出指令到回答完成）的花费，
+        每轮覆盖不累计；「本对话」才是这个页面讨论的会话累计。</li>
+    </ul>
+  </div>
+
+  <div class="sub" style="margin-top:20px">
+    页面为静态离线文件，不联网、不上报；所有数字来自本机存档快照。
+  </div>
+</div>
+
+<script>
+const DATA = {
+  "sid": "session-demo-0000",
+  "generatedAt": "示例数据（非真实账单）",
+  "storePath": "~/.dsh/token-billing-ledger.json",
+  "currency": "¥",
+  "offsetMinutes": 480,
+  "peakDays": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "peakWindows": [
+    {
+      "start": "09:00",
+      "end": "12:00"
+    },
+    {
+      "start": "14:00",
+      "end": "18:00"
+    }
+  ],
+  "tiers": {
+    "default": {
+      "label": "Flash（默认档）",
+      "note": "deepseek-flash / 旧名 deepseek-v4-flash",
+      "peak": {
+        "hit": 0.04,
+        "miss": 2,
+        "out": 8
+      },
+      "off": {
+        "hit": 0.02,
+        "miss": 1,
+        "out": 4
+      }
+    },
+    "deepseek-official/deepseek-v4-pro": {
+      "label": "Pro",
+      "note": "deepseek-v4-pro",
+      "peak": {
+        "hit": 0.3,
+        "miss": 9,
+        "out": 27
+      },
+      "off": {
+        "hit": 0.15,
+        "miss": 4.5,
+        "out": 13.5
+      }
+    }
+  },
+  "sessionTotals": {
+    "calls": 6,
+    "cost": 0.27117916000000003,
+    "hit": 401920,
+    "miss": 100990,
+    "write": 0,
+    "out": 9620,
+    "offPeakCalls": 3
+  },
+  "rows": [
+    {
+      "time": "01-01 10:12:03",
+      "model": "deepseek-flash",
+      "tier": "default",
+      "hit": 120064,
+      "miss": 820,
+      "write": 0,
+      "out": 1450,
+      "offPeak": 0,
+      "cost": 0.01804256
+    },
+    {
+      "time": "01-01 10:13:20",
+      "model": "deepseek-flash",
+      "tier": "default",
+      "hit": 121600,
+      "miss": 410,
+      "write": 0,
+      "out": 980,
+      "offPeak": 0,
+      "cost": 0.013524
+    },
+    {
+      "time": "01-01 12:30:11",
+      "model": "deepseek-flash",
+      "tier": "default",
+      "hit": 0,
+      "miss": 98000,
+      "write": 0,
+      "out": 2200,
+      "offPeak": 1,
+      "cost": 0.1068
+    },
+    {
+      "time": "01-01 12:31:02",
+      "model": "deepseek-flash",
+      "tier": "default",
+      "hit": 98560,
+      "miss": 260,
+      "write": 0,
+      "out": 1180,
+      "offPeak": 1,
+      "cost": 0.0069512
+    },
+    {
+      "time": "01-01 15:04:44",
+      "model": "deepseek-v4-pro",
+      "tier": "deepseek-official/deepseek-v4-pro",
+      "hit": 20480,
+      "miss": 1500,
+      "write": 0,
+      "out": 3600,
+      "offPeak": 0,
+      "cost": 0.116844
+    },
+    {
+      "time": "01-01 22:41:09",
+      "model": "deepseek-v4-pro",
+      "tier": "deepseek-official/deepseek-v4-pro",
+      "hit": 41216,
+      "miss": 0,
+      "write": 0,
+      "out": 210,
+      "offPeak": 1,
+      "cost": 0.0090174
+    }
+  ]
+};
+
+const $ = id => document.getElementById(id);
+const CUR = DATA.currency;
+const money = v => CUR + (Math.abs(v) >= 1 ? v.toFixed(4) : v.toFixed(6));
+const int = v => Number(v).toLocaleString("en-US");
+
+function rates(tierKey, offPeak){
+  const t = DATA.tiers[tierKey] || DATA.tiers["default"];
+  return offPeak ? t.off : t.peak;
+}
+function costOf(row){
+  const r = rates(row.tier || "default", row.offPeak === 1);
+  return (row.hit * r.hit + (row.miss + row.write) * r.miss + row.out * r.out) / 1e6;
+}
+
+/* header */
+$("sid").textContent = DATA.sid;
+$("gen").textContent = DATA.generatedAt;
+$("store-path").textContent = DATA.storePath;
+$("peak-days").textContent = "周一至周五";
+$("peak-win").textContent = DATA.peakWindows.map(w => w.start + "–" + w.end).join("、");
+
+/* stats */
+const T = DATA.sessionTotals;
+$("s-cost").textContent = money(T.cost);
+$("s-calls").textContent = T.calls + " 次模型调用";
+$("s-hit").textContent = int(T.hit);
+$("s-miss").textContent = int(T.miss);
+$("s-out").textContent = int(T.out);
+const prompt = T.hit + T.miss + T.write;
+$("s-hit-rate").textContent = "命中率 " + (prompt ? (T.hit / prompt * 100).toFixed(1) : "0") + "%";
+
+/* flow */
+const FLOW = [
+  ["你发出一条指令", "一条用户消息进入会话，开启一轮 turn。"],
+  ["一轮 turn 里可能有多次模型调用", "多步推理、每轮工具调用之后都要再问一次模型；重试与上下文压缩也会产生额外调用。"],
+  ["每次调用都被拦截", "插件挂在 <span class='mono'>llm/stream</span> 上，透传的同时记下供应商上报的 <span class='mono'>usage</span>。"],
+  ["拆成互不重叠的三类 token", "命中输入 / 未命中输入 / 输出（缓存写入目前恒为 0），<b>相加即完整用量</b>，不会重复计费。"],
+  ["匹配计价档", "用 <span class='mono'>provider/model</span> 精确匹配 → 模型名 → 默认档，决定三个单价。"],
+  ["判定高峰还是低谷", "按<b>这次调用发生的时刻</b>（北京时间、周一至周五 09:00–12:00 / 14:00–18:00 为高峰）选用高峰价或低谷价。<span class='tag red'>高峰</span><span class='tag green'>低谷</span>"],
+  ["算出这一次的费用", "三类 token 各乘单价再相加，除以一百万。"],
+  ["累加到会话", "按 <span class='mono'>sessionId</span> 累加 → 得到「<b>本对话</b>」；同时按天、按模型、按全局分别累加。"]
+];
+$("flow").innerHTML = FLOW.map((s, i) =>
+  `<div class="step"><div class="n">${i + 1}</div><div class="b"><b>${s[0]}</b><p>${s[1]}</p></div></div>`
+  + (i < FLOW.length - 1 ? '<div class="arrow"></div>' : '')).join("");
+
+/* tier table */
+$("tier-table").innerHTML =
+  "<thead><tr><th>档位</th><th>对应模型</th><th class='num'>命中输入</th><th class='num'>未命中输入</th><th class='num'>输出</th></tr></thead><tbody>"
+  + Object.keys(DATA.tiers).map(k => {
+      const t = DATA.tiers[k];
+      const f = (p, o) => `<td class="num"><span class="ok">${CUR}${o}</span> <span class="muted">/ 高峰 ${CUR}${p}</span></td>`;
+      return `<tr><td><b>${t.label}</b></td><td class="muted mono">${t.note}</td>`
+        + f(t.peak.hit, t.off.hit) + f(t.peak.miss, t.off.miss) + f(t.peak.out, t.off.out) + "</tr>";
+    }).join("") + "</tbody>";
+
+/* rows replay */
+let mismatch = 0, sum = 0;
+const body = DATA.rows.map((r, i) => {
+  const calc = costOf(r);
+  sum += calc;
+  const diff = Math.abs(calc - r.cost);
+  if (diff > 1e-9) mismatch++;
+  const r2 = rates(r.tier, r.offPeak === 1);
+  return `<tr>
+    <td class="num muted">${i + 1}</td>
+    <td class="mono">${r.time}</td>
+    <td class="mono">${r.model}</td>
+    <td>${r.offPeak === 1 ? '<span class="tag green">低谷</span>' : '<span class="tag red">高峰</span>'}</td>
+    <td class="num">${int(r.hit)}</td>
+    <td class="num">${int(r.miss)}</td>
+    <td class="num">${int(r.out)}</td>
+    <td class="num muted mono">${CUR}${r2.hit}/${CUR}${r2.miss}/${CUR}${r2.out}</td>
+    <td class="num">${money(calc)}</td>
+    <td class="num ${diff > 1e-9 ? "bad" : "muted"}">${diff > 1e-9 ? "差 " + diff.toExponential(1) : "一致"}</td>
+  </tr>`;
+}).join("");
+$("rows").innerHTML =
+  "<thead><tr><th class='num'>#</th><th>时间</th><th>模型</th><th>时段</th>"
+  + "<th class='num'>命中</th><th class='num'>未命中</th><th class='num'>输出</th>"
+  + "<th class='num'>单价(命中/未命中/输出)</th><th class='num'>本行费用</th><th class='num'>与账本</th></tr></thead><tbody>"
+  + body
+  + `<tr class="total"><td colspan="8">合计（本对话）</td><td class="num">${money(sum)}</td>`
+  + `<td class="num">${Math.abs(sum - T.cost) < 1e-9 ? "一致" : "差 " + Math.abs(sum - T.cost).toExponential(1)}</td></tr></tbody>`;
+$("verify").textContent = mismatch === 0
+  ? DATA.rows.length + " 行全部一致，合计与账本记录的 " + money(T.cost) + " 精确吻合。"
+  : mismatch + " 行存在差异。";
+
+/* composition：按每行各自的时段/档位分别累加 */
+let cHit = 0, cMiss = 0, cOut = 0;
+DATA.rows.forEach(r => {
+  const rr = rates(r.tier || "default", r.offPeak === 1);
+  cHit += r.hit * rr.hit / 1e6;
+  cMiss += (r.miss + r.write) * rr.miss / 1e6;
+  cOut += r.out * rr.out / 1e6;
+});
+const cSum = cHit + cMiss + cOut;
+const parts = [
+  ["命中输入的花费", cHit, "#4ade80"],
+  ["未命中输入的花费", cMiss, "#60a5fa"],
+  ["输出的花费", cOut, "#a78bfa"]
+];
+$("bar").innerHTML = parts.map(p =>
+  `<span style="width:${(p[1] / cSum * 100).toFixed(2)}%;background:${p[2]}" title="${p[0]}">${(p[1] / cSum * 100).toFixed(1)}%</span>`).join("");
+$("legend").innerHTML = parts.map(p =>
+  `<span><i class="dot" style="background:${p[2]}"></i>${p[0]} <b>${money(p[1])}</b></span>`).join("");
+$("insight").innerHTML =
+  `注意看：命中输入有 <b>${(T.hit / 1e4).toFixed(0)} 万</b> tokens，却只花了 <b>${money(cHit)}</b>（占 ${(cHit / cSum * 100).toFixed(0)}%）；`
+  + `输出只有 <b>${(T.out / 1e4).toFixed(1)} 万</b> tokens，却花了 <b>${money(cOut)}</b>（占 ${(cOut / cSum * 100).toFixed(0)}%）。`
+  + `这就是缓存的价值：prompt 里绝大部分被缓存命中，单价只有未命中的 1/50。`;
+
+/* calculator */
+const tierSel = $("c-tier");
+tierSel.innerHTML = Object.keys(DATA.tiers).map(k =>
+  `<option value="${k}">${DATA.tiers[k].label}</option>`).join("");
+
+function beijingNow(){
+  const now = new Date();
+  const d = new Date(now.getTime() + (DATA.offsetMinutes + now.getTimezoneOffset()) * 60000);
+  return d;
+}
+function isPeakNow(){
+  const d = beijingNow();
+  const dow = d.getDay();               // 0=Sun
+  const iso = dow === 0 ? 7 : dow;
+  if (DATA.peakDays.indexOf(iso) === -1) return false;
+  const m = d.getHours() * 60 + d.getMinutes();
+  return DATA.peakWindows.some(w => {
+    const [sh, sm] = w.start.split(":").map(Number);
+    const [eh, em] = w.end.split(":").map(Number);
+    const s = sh * 60 + sm, e = eh * 60 + em;
+    return s < e ? (m >= s && m < e) : (m >= s || m < e);
+  });
+}
+
+function updateLabel(){
+  const d = beijingNow();
+  const z = n => String(n).padStart(2, "0");
+  const peak = isPeakNow();
+  $("c-now").innerHTML = "当前北京时间 <b>" + d.getFullYear() + "-" + z(d.getMonth() + 1) + "-" + z(d.getDate())
+    + " " + z(d.getHours()) + ":" + z(d.getMinutes()) + "</b> → "
+    + (peak ? '<span class="tag red">高峰</span>' : '<span class="tag green">低谷</span>');
+}
+
+function recalc(){
+  const tierKey = tierSel.value;
+  const when = $("c-when").value;
+  const off = when === "auto" ? !isPeakNow() : (when === "off");
+  const r = rates(tierKey, off);
+  const hit = Number($("c-hit").value) || 0;
+  const miss = Number($("c-miss").value) || 0;
+  const write = Number($("c-write").value) || 0;
+  const out = Number($("c-out").value) || 0;
+  const a = hit * r.hit, b = (miss + write) * r.miss, c = out * r.out;
+  const total = (a + b + c) / 1e6;
+  $("c-result").textContent = money(total);
+  $("c-unit").textContent = (off ? "低谷价" : "高峰价")
+    + " · 命中 " + CUR + r.hit + " / 未命中 " + CUR + r.miss + " / 输出 " + CUR + r.out + " 每百万 tokens";
+  $("c-steps").innerHTML =
+      `<div><span class="c1">命中</span> ${int(hit)} × ${CUR}${r.hit} = ${a.toFixed(4)}</div>`
+    + `<div><span class="c2">未命中+写入</span> (${int(miss)} + ${int(write)}) × ${CUR}${r.miss} = ${b.toFixed(4)}</div>`
+    + `<div><span class="c4">输出</span> ${int(out)} × ${CUR}${r.out} = ${c.toFixed(4)}</div>`
+    + `<div style="border-top:1px dashed var(--line);margin-top:6px;padding-top:6px">合计 ${(a + b + c).toFixed(4)} ÷ 1,000,000 = <b>${money(total)}</b></div>`;
+}
+
+/* seed calculator with the biggest row of this conversation */
+const biggest = DATA.rows.reduce((a, b) => (costOf(b) > costOf(a) ? b : a), DATA.rows[0]);
+$("c-hit").value = biggest.hit;
+$("c-miss").value = biggest.miss;
+$("c-write").value = biggest.write;
+$("c-out").value = biggest.out;
+$("c-when").value = biggest.offPeak === 1 ? "off" : "peak";
+["c-tier", "c-when", "c-hit", "c-miss", "c-write", "c-out"].forEach(id =>
+  $(id).addEventListener("input", () => { if (id === "c-when") updateLabel(); recalc(); }));
+updateLabel();
+recalc();
+</script>
+</body>
+</html>
