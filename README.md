@@ -5,6 +5,12 @@
 
 一句话：**把「这次调用花了多少钱」算清楚，并记住它。**
 
+**下载 / 安装**：[最新版本 Releases](https://github.com/singei8/DSH-TOKEN-feiyong/releases/latest) ·
+安装步骤（含"一句话让 Agent 自己装"）见 [INSTALL.md](INSTALL.md) · 版本记录见 [CHANGELOG.md](CHANGELOG.md)
+
+> 本项目**没有 exe / msi 安装包，也不需要编译**：`src/host.js` 与 `src/client.js` 的内容本身就是
+> `cordis_define` 参数的 `code.host` / `code.client`。"安装"= 把这两段代码定义进你的 DSH 并激活。
+
 ---
 
 ## 功能
@@ -140,6 +146,8 @@ DSH-TOKEN-feiyong/
 │  └─ billing-explained.html   # 「本对话」计费逻辑可视化：流程图 / 公式 / 逐笔回放 / 计算器
 ├─ examples/
 │  └─ ledger.sample.json       # 本地存档格式示例
+├─ INSTALL.md                  # 安装 / 验证 / 卸载 / 更新说明
+├─ CHANGELOG.md                # 版本记录
 ├─ LICENSE                     # MIT
 └─ package.json
 ```
