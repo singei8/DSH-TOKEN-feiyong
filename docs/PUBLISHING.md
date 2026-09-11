@@ -148,21 +148,48 @@ tarball: https://github.com/singei8/DSH-TOKEN-feiyong/releases/download/v1.2.0/d
 | 门槛 | 现状 | 状态 |
 |---|---|---|
 | `dsh-plugin` topic | 仓库原来的 8 个 topic 里没有它 | ✅ 已于 2026-09-11 补上 |
-| `tarball` 字段 | Release 资产现为 `DSH-TOKEN-feiyong-v1.0.0.zip` | ❌ 需改成不带版本号的 `.tgz` |
-| `dsh.bundle` 清单 + `cordis.patch.yml` | 都没有 | ❌ 待移植后一并加 |
+| 真实可安装的代码 | `lib/index.js` + `lib/client.js`（`src/` 为源码，`scripts/build.mjs` 构建） | ✅ 已移植 |
+| `dsh.bundle` 清单 + `cordis.patch.yml` | `package.json` 含 `dsh.bundle` / `dsh.client` / `exports` | ✅ 已就绪 |
+| `tarball` 字段 | v1.1.0 Release 资产 `dsh-token-feiyong.tgz`（**不带版本号**） | ✅ 已发布 |
 | 仓库创建满 1 天 | `created_at = 2026-09-11T14:09:19Z` | ⏳ **2026-09-12 14:09 (UTC) 之后**才满足 |
-| 真实可安装的代码 | `src/*.js` 是**动态 Cordis 包**的函数体（无 `import/export`，靠沙箱 `harness.*`） | ❌ 待移植 |
-| npm 包 | 未发布 | ⏳ 可选 |
-| 截图 | 无 | ⏳ 可选 |
+| 条目文件 | `data/plugins/singei8__DSH-TOKEN-feiyong.yml`（内容见下） | ⏳ 待提 PR |
+| npm 包 | 未发布 | ⏳ 可选，不影响收录 |
 
-**关键结论：现在的仓库还不能被收录。** 现有 `src/host.js` / `src/client.js` 是
-`cordis_define` 的 `code.host` / `code.client` 函数体，只能在 DSH 进程内的沙箱里跑；
-`package.json` 没有 `main` / `type` / `exports`，装上去导不出 `apply`。
-所以「正规路径」的实质工作是**把动态包移植成真实插件包**。
+**移植已完成并验证**：`node scripts/check.mjs` 72 项自检全过（真起 HTTP 服务跑通 5 条路由、
+记账、高峰/低谷单价含周末判档、单次收口、账本落盘、配置保存与清空、客户端 bundle 加载与
+slot 注册、apply 重入不重复计数）。真实宿主里也实测通过：热挂载后 `POST /dsh-token-feiyong/state`
+返回 200，`__DSH_BOOT__.entries` 含本插件，服务出的 `client.js` 与本地构建逐字节一致。
 
 ---
 
-## 四、移植设计：动态包 → 真实插件包
+## 四、移植设计：动态包 → 真实插件包（已完成）
+
+已完成形态：
+
+```
+package.json          type:module, main:lib/index.js, exports{., ./client, ./cordis.patch.yml, ./package.json}
+                      dsh.bundle.patch + dsh.client{platform:web}
+cordis.patch.yml      - insert: [{ id: dsh-token-feiyong, name: dsh-token-feiyong }]
+lib/index.js          宿主半边（Node，ESM，无 import）
+lib/client.js         浏览器半边（window.__ModuleLoader__ 工厂，require('react')）
+src/                  人类可读源码：两个动态包函数体
+scripts/build.mjs     定点变换 + 逐处断言
+scripts/check.mjs     72 项自检
+```
+
+与最初设计的差异（都是实测后修正的）：
+
+- **沙箱策略覆盖必须保留**：账本写在 `<DSH_HOME>`（工作区之外）、余额探测要联网，
+  两处都要按次请求 `danger-full-access`。最初以为真实插件不需要，实测报
+  `file access denied under workspace-write mode`。
+- **`apply` 必须可重入**：profile 的 `patchReload: live` 会让同一模块实例再次 `apply`，
+  而 ESM 模块在进程内复用；原先 `loadStore` 会把账本聚合再并入一次（实测 `calls` 185 → 382）。
+  现在 `apply` 先复位内存聚合。
+- **`styles.insert` 要用自建 `<style>` 替代**，交 `ctx.effect` 托管（真实插件没有沙箱的 `styles`）。
+- **`dsh.client` 只需 `platform: web`**：`lib/client.js` 只 `require('react')`，
+  由 harness 的浏览器模块加载器提供；不需要声明 `@deepseek-ai/dsh-client-*` 模块。
+- **不需要 `peerDependencies`**：两侧代码都不 import 任何 npm 包，
+  也就不存在官方文档警告的预发布 `ERESOLVE` 陷阱。
 
 真实插件包的目标形态（对照已安装的 `dshmarket@1.45.1`）：
 
@@ -175,103 +202,92 @@ lib/client.js         浏览器半边（由 bundler 产出的 __ModuleLoader__ �
 screenshots.json      可选
 ```
 
-### 4.1 宿主半边 `lib/index.js`
+### 4.1 实际改了哪些地方
 
-导出契约与 `dshmarket` 相同：
-
-```js
-export const name = 'dsh-token-feiyong'
-export function apply(ctx, config) {
-  ctx.inject(['webServer'], (hostCtx) => {
-    hostCtx.effect(() => mountRoutes(hostCtx), 'dsh-token-feiyong: http routes')
-  })
-}
-```
-
-`src/host.js` 里可直接沿用、不用改的部分：
-
-- `ctx.get('settings')`、`ctx.get('fs')`、`ctx.get('credentials')`、`ctx.get('shell')`
-  —— 全是真实服务名（沙箱里也是从 ctx 取的）。
-- `ctx.on('llm/stream', (options, next) => ...)`、`ctx.on('agent/turn-stopping', ...)`、
-  `ctx.on('agent/inbox/claimed', ...)`、`ctx.on('api-session/status', (sessionId, running) => ...)`
-  —— 事件与作用域过滤行为一致。
-- 计费公式、价目表、档位（Flash / Pro）、高峰低谷判定、账本结构与上限、落盘结构 —— 全部照搬。
-
-必须替换的部分：
+宿主半边（`src/host.js` → `lib/index.js`）：
 
 | 动态包写法 | 真实插件写法 |
-|---|---|
-| `harness.handle('billing/state', fn)` 等 5 个方法 | `webServer` 上注册 5 条 HTTP 路由：`/dsh-token-feiyong/state`、`/save`、`/store`、`/balance`、`/reset` |
-| 沙箱 RPC（Client→Host，仅 JSON） | 普通 `fetch`，`hostCtx.effect(...)` 返回的 disposer 负责注销路由 |
-| `spec.sandboxPolicy = { mode: 'danger-full-access', ... }`（为绕开工作区沙箱无网络） | **删除**。真实宿主进程没有那层沙箱，余额探测直接用 `credentials` + 网络 |
-| `console` 写宿主 stdout | 宿主侧 `ctx.logger` 或原样 `console` |
+| --- | --- |
+| `return { apply(ctx) { … } }` | `export const name` + `export function apply(ctx, rowConfig)` |
+| `harness.handle('billing/state', fn)` 等 5 处 | `webServer.register({ kind: 'exact', path, handler })`，由 `ctx.effect` 注销 |
+| 沙箱 RPC（仅 JSON 往返） | `POST` + `x-dsh-token-feiyong: 1` 头校验；非 POST 405、无头 403、坏 JSON 400 |
+| `ctx.get('settings')`、`ctx.get('fs')`、`ctx.get('credentials')`、`ctx.get('shell')` | **原样保留**（服务名与行为一致） |
+| `ctx.on('llm/stream')`、`ctx.on('agent/*')`、`ctx.on('api-session/status')` | **原样保留**（事件与作用域过滤一致） |
+| 按次沙箱策略覆盖（`danger-full-access`） | **保留**：账本在工作区外、余额探测要联网 |
+| 模块级聚合一进到底 | 新增 `__resetState()`：`apply` 先复位内存聚合再读账本，热重载不重复计数 |
 
-### 4.2 浏览器半边 `lib/client.js`
-
-真实客户端半边**不是普通 ESM 模块**，而是被 harness 的浏览器模块加载器包装的工厂：
-
-```js
-window.__ModuleLoader__.load({ id: "dsh-token-feiyong", factory: (require) => {
-  let react = require("react")
-  let primitives = require("@deepseek-ai/dsh-client-ui-primitives")
-  // ... CJS 风格 bundle ...
-} })
-```
-
-React / react-dom / `@deepseek-ai/dsh-client-*` 由 loader 提供（external），
-所以需要一个 bundler（tsdown/rolldown/webpack 皆可，产出该包装格式）来构建 `lib/client.js`。
-
-`src/client.js` 里可直接沿用、不用改的部分：
-
-- `slots.inject('settings.section', ...)` + `slots.register({ name:'settings.section', id:'token-billing', order:30, label:'费用统计' }, BillingPanel)`
-  —— 与真实 API 同形（真实写法是 `ctx.slots.inject`）。
-- `slots.inject('conversation.composer.dock', ...)` + `register({ ..., id:'token-billing', order:1 }, BillingMeter)`
-  —— 输入框下方徽标，原样保留。
-- 全部 React 组件（107 处 `React.createElement`）、CSS 变量与主题 token、表格与卡片渲染逻辑。
-
-必须替换 / 删除的部分：
+客户端半边（`src/client.js` → `lib/client.js`）：
 
 | 动态包写法 | 真实插件写法 |
-|---|---|
-| `host.call('billing/state', args)` 等 5 处 | `fetch('/dsh-token-feiyong/state', ...)` 等 |
-| `ctx.get('slots')` / `ctx.get('timer')` | 模块级 `export const inject = ['slots']`，`apply(ctx)` 里直接用 `ctx.slots` |
-| `React.createElement` 取全局 React | bundle 内 `require('react')`；写 TSX 也行，构建时转 |
-| `slots.inject('sidebar.footer.action', ...)` 注册 id `cordis-panel` 返回 `null` | **删除** |
+| --- | --- |
+| 沙箱全局 `React` | `require('react')`（由 harness 的浏览器模块加载器提供） |
+| 沙箱全局 `host.call(m, a)` | `hostCall(m, a)` → `fetch('/dsh-token-feiyong/<m>')` |
+| 沙箱全局 `styles.insert(CSS)` | 自建 `<style>` 注入，交 `ctx.effect` 托管 |
+| `ctx.get('slots')` / `ctx.get('timer')` | **原样保留**（`exports.inject = ['slots']`） |
+| 注册 `sidebar.footer.action` 冒充 `cordis-panel` | **删除**（动态包专用手段，留着会挡掉 Cordis 审批 UI） |
+| 整个文件就是函数体 | 包进 `window.__ModuleLoader__.load({ id, factory })`，导出 `name` / `inject` / `apply` |
 
-最后一条要特别说明：冒充 `cordis-panel` 只是动态插件时代的临时手段——动态包会在侧边栏底部
-留一行 "Cordis Plugin"，而真实安装的插件没有那一行，不需要隐藏它。
-更糟的是它会把 Cordis 插件自己的审批/卸载 UI 一并挡掉。移植时应当去掉。
+### 4.2 自测与实测结果
 
-### 4.3 移植后的自测清单
+`node scripts/check.mjs` —— **72 项全过**：
 
-1. `dsh plugin add` 或写进 profile 的 `dependencies` + `dsh.profile.bundles`，热挂载成功。
-2. 设置里出现「费用统计」；`conversation.composer.dock` 徽标显示 `时段 · 单次 · 本对话 · 今日 · 余额`。
-3. 发一轮对话，账本文件追加一行，徽标数字随之变化。
-4. 改一次单价并保存，重启后仍生效（`configDirty` 逻辑）。
-5. 卸载/停用后徽标与设置项消失，无残留路由。
-6. 侧边栏底部**不再**出现 "Cordis Plugin" 行（本就该没有）。
+1. 宿主 `apply` 后注册 5 条 exact 路由，且在 `ctx.effect` 内挂载（可注销）。
+2. 真起 HTTP 服务验证：`POST /state` 200、缺自定义头 403、GET 405、坏 JSON 400。
+3. 计价与分时：周一 10:00（北京）判高峰、20:00 判低谷、周六判低谷；
+   Pro 档走专用价目表（0.30 / 9 / 27 与 0.15 / 4.5 / 13.5），Flash 落 `default` 档（0.04 / 2 / 8）。
+4. 单次收口：`api-session/status(running=false)` 关闭本轮，`lastTurn` 汇总正确。
+5. 落盘：`store` 路由触发写盘，`version=3`，累计与明细都写入。
+6. 配置：`save` 覆盖币种 / 低谷比例 / 单价并可读回；`reset` 清空累计与明细。
+7. 客户端：`__ModuleLoader__.load` 被调用、导出 `name` / `inject` / `apply`、
+   样式经 `ctx.effect` 托管且可注销、注册且**仅**注册 `settings.section` 与 `conversation.composer.dock`。
+8. 重入：连续 `apply` 两次，`totals` 不翻倍（回归下面那个实测 bug）。
 
----
+真实宿主（DSH Desktop，`web` profile）实测：
+
+- 借 profile 的 live patch 热挂载后，`POST /dsh-token-feiyong/state` 返回 200；
+  读回账本 `<DSH_HOME>/token-billing-ledger.json`，**路径与动态版一致**，历史自然延续。
+- `__DSH_BOOT__.entries` 含
+  `{"id":"dsh-token-feiyong","url":"/plugins/??dsh-token-feiyong/client.js&rev=…"}`；
+  该 URL 取回的 bundle 与本地构建**逐字节一致**（仅多一行 harness 追加的 sourceMappingURL）。
+- 分时判定正确：周五 22:49（北京）报「低谷」。
+
 
 ## 五、提交收录的完整步骤
 
-1. 完成第四节移植，自测通过，`main` 推到 `github.com/singei8/DSH-TOKEN-feiyong`。
-2. 打 tag、发 Release，资产名不带版本号：`dsh-token-feiyong.tgz`（`tar -czf`，POSIX 路径）。
-3. 等仓库创建满 1 天：**2026-09-12 14:09 UTC 之后**。
+前两步已完成（✅），现在只等仓库满 1 天就能提 PR。
+
+1. ✅ 完成移植，`node scripts/check.mjs` 72 项全过，`main` 已推到
+   `github.com/singei8/DSH-TOKEN-feiyong`（commit `1932c1c`）。
+2. ✅ 打 tag `v1.1.0`、发 Release，资产名不带版本号：
+   <https://github.com/singei8/DSH-TOKEN-feiyong/releases/latest/download/dsh-token-feiyong.tgz>
+   （已验证可下载，SHA256 与本地构建一致）。
+3. ⏳ 等仓库创建满 1 天：**2026-09-12 14:09 UTC 之后**。
 4. Fork `awesome-dsh-plugin/awesome-dsh-plugin`，新建分支，**只加一个文件**
-   `data/plugins/singei8__DSH-TOKEN-feiyong.yml`（内容见第二节）。
+   `data/plugins/singei8__DSH-TOKEN-feiyong.yml`：
+
+```yaml
+url: https://github.com/singei8/DSH-TOKEN-feiyong
+name: singei8/DSH-TOKEN-feiyong
+category: usage
+tarball: https://github.com/singei8/DSH-TOKEN-feiyong/releases/latest/download/dsh-token-feiyong.tgz
+description:
+  en: Per-turn token cost meter for DeepSeek Harness: official rate card with peak/off-peak pricing, account balance, single-turn and per-conversation totals, persisted to a local ledger.
+  zh: DSH 逐笔 token 计费插件：按官方价目表分时计价（缓存命中 / 未命中 / 输出），含账户余额、单次与本对话花费，数据本地持久化。
+```
+
 5. （可选预览）`npm ci && node scripts/generate-readme.mjs` —— 不改 README 也能提。
 6. 开 PR。CI 若报错会明确指出改什么，在同一分支推送修复即可，无需重开 PR。
 7. 合并后站点自动重建，几十秒到几分钟后即可在市场搜到并一键安装。
 
 ### 时间线
 
-| 时间 | 动作 |
-|---|---|
-| 现在 | 移植宿主/客户端两半，构建 `lib/`，本地自测 |
-| 移植完成 | 发 `.tgz` Release，补 `dsh.bundle` 清单与 `cordis.patch.yml` |
-| 2026-09-12 14:09 UTC 后 | 提收录 PR |
-| 合并后 | 市场可搜到，一键安装 |
+| 时间 | 动作 | 状态 |
+|---|---|---|
+| 2026-09-11 | `dsh-plugin` topic、移植宿主/客户端两半、构建 `lib/` | ✅ |
+| 2026-09-11 | `.tgz` Release（`dsh-token-feiyong.tgz`）、`dsh.bundle` 清单与 `cordis.patch.yml` | ✅ |
+| 2026-09-11 | 真实宿主实测：热挂载、路由 200、账本读回、客户端清单与 bundle 一致 | ✅ |
+| 2026-09-12 14:09 UTC 后 | 提收录 PR | ⏳ |
+| 合并后 | 市场可搜到，一键安装 | ⏳ |
 
 ---
 
