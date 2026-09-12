@@ -150,7 +150,7 @@ tarball: https://github.com/singei8/DSH-TOKEN-feiyong/releases/download/v1.2.0/d
 | `dsh-plugin` topic | 仓库原来的 8 个 topic 里没有它 | ✅ 已于 2026-09-11 补上 |
 | 真实可安装的代码 | `lib/index.js` + `lib/client.js`（`src/` 为源码，`scripts/build.mjs` 构建） | ✅ 已移植 |
 | `dsh.bundle` 清单 + `cordis.patch.yml` | `package.json` 含 `dsh.bundle` / `dsh.client` / `exports` | ✅ 已就绪 |
-| `tarball` 字段 | v1.1.0 Release 资产 `dsh-token-feiyong.tgz`（**不带版本号**） | ✅ 已发布 |
+| `tarball` 字段 | Release 资产 `dsh-token-feiyong.tgz`（**不带版本号**，最新为 v1.2.0） | ✅ 已发布 |
 | 仓库创建满 1 天 | `created_at = 2026-09-11T14:09:19Z` | ⏳ **2026-09-12 14:09 (UTC) 之后**才满足 |
 | 条目文件 | `data/plugins/singei8__DSH-TOKEN-feiyong.yml`（内容见下） | ⏳ 待提 PR |
 | npm 包 | 未发布 | ⏳ 可选，不影响收录 |
@@ -258,8 +258,8 @@ screenshots.json      可选
 前两步已完成（✅），现在只等仓库满 1 天就能提 PR。
 
 1. ✅ 完成移植，`node scripts/check.mjs` 87 项全过，`main` 已推到
-   `github.com/singei8/DSH-TOKEN-feiyong`（commit `1932c1c`）。
-2. ✅ 打 tag `v1.1.0`、发 Release，资产名不带版本号：
+   `github.com/singei8/DSH-TOKEN-feiyong`。
+2. ✅ 打 tag、发 Release（最新 v1.2.0），资产名始终不带版本号：
    <https://github.com/singei8/DSH-TOKEN-feiyong/releases/latest/download/dsh-token-feiyong.tgz>
    （已验证可下载，SHA256 与本地构建一致）。
 3. ⏳ 等仓库创建满 1 天：**2026-09-12 14:09 UTC 之后**。
@@ -272,8 +272,8 @@ name: singei8/DSH-TOKEN-feiyong
 category: usage
 tarball: https://github.com/singei8/DSH-TOKEN-feiyong/releases/latest/download/dsh-token-feiyong.tgz
 description:
-  en: Per-turn token cost meter for DeepSeek Harness: official rate card with peak/off-peak pricing, account balance, single-turn and per-conversation totals, persisted to a local ledger.
-  zh: DSH 逐笔 token 计费插件：按官方价目表分时计价（缓存命中 / 未命中 / 输出），含账户余额、单次与本对话花费，数据本地持久化。
+  en: Per-turn token cost meter for DeepSeek Harness: official rate card with peak/off-peak pricing, account balance, single-turn and per-conversation totals (side-chat and subagent child sessions fold into the conversation that started them), persisted to a local ledger.
+  zh: DSH 逐笔 token 计费插件：按官方价目表分时计价（缓存命中 / 未命中 / 输出），含账户余额、单次与本对话花费，侧边对话与子代理的花费并入所属主对话，数据本地持久化。
 ```
 
 5. （可选预览）`npm ci && node scripts/generate-readme.mjs` —— 不改 README 也能提。

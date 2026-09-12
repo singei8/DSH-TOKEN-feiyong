@@ -90,7 +90,8 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modul
 | 页面启动清单 | 浏览器控制台执行 `__DSH_BOOT__.entries.some(e => e.id === 'dsh-token-feiyong')` → `true` |
 | 宿主路由 | `curl -X POST -H "x-dsh-token-feiyong: 1" http://127.0.0.1:3080/dsh-token-feiyong/state` → JSON 快照 |
 | 首次调用后 | 生成存档 `<DSH_HOME>/token-billing-ledger.json`（通常 `~/.dsh/token-billing-ledger.json`） |
-| Host 日志 | 含 `[billing]` 前缀的行：`apply:` / `http: mounted 5 routes` / `store: ready` |
+| 子会话并入 | 打开侧边对话提问后，主对话的「本对话」包含该花费；设置页出现「本对话的子会话」表 |
+| Host 日志 | 含 `[billing]` 前缀的行：`apply:` / `http: mounted 5 routes` / `store: ready` / `adopted N historical child session(s)` |
 
 改过 `lib/index.js` 或 `src/client.js` 后跑一次 `node scripts/check.mjs`：它会真起一个 HTTP 服务
 把 5 条路由注册进去，用真实请求跑通记账、分时计价、单次收口、`node:fs` 落盘、`fetch` 拉余额
@@ -101,6 +102,8 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modul
 ## 前置条件与权限
 
 - **必需**：DSH（`web` profile）。宿主需提供 `webServer`（挂 HTTP 路由）；客户端需提供 `slots`。
+- **子会话归属（可选）**：宿主 `sessions` 服务存在时，读会话头的 `parentSession` 把侧边对话 /
+  子代理的花费并入主对话；服务缺失时退化为「各会话单独统计」，计费本身不受影响。
 - **落盘**：账本用 `node:fs` 直接读写 `<DSH_HOME>/token-billing-ledger.json`。
   **不需要任何 `fs` 服务** —— 插件挂在 profile 根级，看不见按作用域提供的 `fs`/`shell`，
   早期版本正是因此报「存档异常 / fs 服务不可用」。

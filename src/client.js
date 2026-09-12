@@ -203,6 +203,7 @@ return {
         peakWindowsText: windowsText(config.peakWindows),
         offPeakRatio: String(config.offPeakRatio === undefined ? 0.5 : config.offPeakRatio),
         showBalance: config.showBalance !== false,
+        mergeChildSessions: config.mergeChildSessions !== false,
         unconfinedBalance: config.unconfinedBalance !== false,
         persist: config.persist !== false,
         credentialRef: typeof config.credentialRef === 'string' ? config.credentialRef : 'DEEPSEEK_API_KEY',
@@ -238,6 +239,7 @@ return {
         peakWindows: parseWindows(draft.peakWindowsText),
         offPeakRatio: Number(draft.offPeakRatio),
         showBalance: draft.showBalance === true,
+        mergeChildSessions: draft.mergeChildSessions === true,
         unconfinedBalance: draft.unconfinedBalance === true,
         persist: draft.persist === true,
         credentialRef: draft.credentialRef,
@@ -331,6 +333,8 @@ return {
       const lastTurn = (state.lastTurn === undefined || state.lastTurn === null) ? null : state.lastTurn
       const today = (state.todayTotals === undefined || state.todayTotals === null) ? state.totals : state.todayTotals
       const session = state.sessionTotals
+      const childList = Array.isArray(state.children) ? state.children : []
+      const childCost = childList.reduce(function (sum, item) { return sum + item.bucket.cost }, 0)
       const showBalance = config.showBalance !== false
       const balanceOk = balance !== undefined && balance !== null && balance.ok === true
       const storeBroken = config.persist !== false && store !== null
@@ -349,6 +353,9 @@ return {
       }
       tipLines.push('本对话总花费 ' + fmtMoney(session.cost, config.currency)
         + '（命中 ' + fmtTok(session.hit) + ' / 未命中 ' + fmtTok(session.miss) + ' / 输出 ' + fmtTok(session.out) + ' tokens，' + String(session.calls) + ' 次调用）')
+      if (childList.length > 0) {
+        tipLines.push('  其中子会话（侧边对话 / 子代理）' + String(childList.length) + ' 个 · ' + fmtMoney(childCost, config.currency))
+      }
       tipLines.push('今日总花费 ' + fmtMoney(today.cost, config.currency) + '（' + String(today.calls) + ' 次调用）')
       if (showBalance) {
         if (balanceOk) {
@@ -419,6 +426,9 @@ return {
       const priceKeys = Object.keys(editing.prices)
       const total = state.totals
       const today = (state.todayTotals === undefined || state.todayTotals === null) ? state.totals : state.todayTotals
+      const childList = Array.isArray(state.children) ? state.children : []
+      const childCalls = childList.reduce(function (sum, item) { return sum + item.bucket.calls }, 0)
+      const childCost = childList.reduce(function (sum, item) { return sum + item.bucket.cost }, 0)
       const hitRate = (total.hit + total.miss) > 0 ? (total.hit / (total.hit + total.miss) * 100) : 0
       const balanceSymbolText = balanceSymbol(balance, config.currency)
       const enabled = config.enabled !== false
@@ -673,6 +683,8 @@ return {
             enabled ? '插件：已启用' : '插件：已关闭'),
           React.createElement('button', { className: 'tb-chip' + (editing.showBalance ? ' tb-chip-on' : ''), onClick: function () { change({ showBalance: !editing.showBalance }) } },
             editing.showBalance ? '余额显示：开' : '余额显示：关'),
+          React.createElement('button', { className: 'tb-chip' + (editing.mergeChildSessions ? ' tb-chip-on' : ''), onClick: function () { change({ mergeChildSessions: !editing.mergeChildSessions }) } },
+            editing.mergeChildSessions ? '子会话：并入本对话' : '子会话：单独统计'),
           React.createElement('button', { className: 'tb-chip' + (editing.unconfinedBalance ? ' tb-chip-on' : ''), onClick: function () { change({ unconfinedBalance: !editing.unconfinedBalance }) } },
             editing.unconfinedBalance ? '余额请求：非沙箱' : '余额请求：沙箱'),
           React.createElement('button', { className: 'tb-chip' + (editing.persist ? ' tb-chip-on' : ''), onClick: function () { change({ persist: !editing.persist }) } },
@@ -701,6 +713,8 @@ return {
           card('单次花费', lastTurn === null ? '—' : fmtMoney(lastTurn.cost, config.currency),
             lastTurn === null ? '还没有完成一轮提问' : (lastTurn.atText + ' · ' + String(lastTurn.calls) + ' 次调用' + (lastTurn.turn > 0 ? ' · 第 ' + String(lastTurn.turn) + ' 轮' : ''))),
           card('今日花费', fmtMoney(today.cost, config.currency), today.calls + ' 次调用'),
+          childList.length === 0 ? null : card('本对话子会话', fmtMoney(childCost, config.currency),
+            String(childCalls) + ' 次调用 · ' + String(childList.length) + ' 个，已并入「本对话」'),
         ]),
         React.createElement('div', { className: 'tb-section-title' }, '累计（含历史存档，不随重启重置）'),
         cards([
@@ -711,6 +725,20 @@ return {
           card('输出', fmtInt(total.out)),
           card('低谷调用', fmtInt(total.offPeakCalls), '高峰 ' + fmtInt(total.calls - total.offPeakCalls) + ' 次'),
         ]),
+        childList.length === 0 ? null : React.createElement('div', null,
+          React.createElement('div', { className: 'tb-section-title' }, '本对话的子会话（侧边对话 / 子代理，费用已并入「本对话」）'),
+          table([
+            { label: '子会话' }, { label: '次数', num: true }, { label: '命中', num: true },
+            { label: '未命中', num: true }, { label: '输出', num: true }, { label: '费用', num: true },
+          ], childList.map(function (item, index) {
+            return React.createElement('tr', { key: 'child-' + String(index) },
+              React.createElement('td', null, String(item.sessionId).slice(-12)),
+              React.createElement('td', { className: 'tb-num' }, String(item.bucket.calls)),
+              React.createElement('td', { className: 'tb-num' }, fmtTok(item.bucket.hit)),
+              React.createElement('td', { className: 'tb-num' }, fmtTok(item.bucket.miss)),
+              React.createElement('td', { className: 'tb-num' }, fmtTok(item.bucket.out)),
+              React.createElement('td', { className: 'tb-num' }, fmtMoney(item.bucket.cost, config.currency)))
+          }), '没有子会话')),
         React.createElement('div', { className: 'tb-section-title' }, '按模型（悬停「计价档」可看该档两套单价）'),
         table([
           { label: '模型' }, { label: '计价档' }, { label: '次数', num: true }, { label: '命中', num: true },

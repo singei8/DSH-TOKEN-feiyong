@@ -22,6 +22,7 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { zstdCompressSync } from 'node:zlib'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
@@ -84,7 +85,8 @@ const hostSource = read('lib/index.js')
 for (const forbidden of ["hostCtx.get('fs')", "hostCtx.get('settings')", "hostCtx.get('shell')"]) {
   ok(!hostSource.includes(forbidden), 'host half does not read ' + forbidden)
 }
-ok(hostSource.includes("import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'"), 'host half imports node:fs')
+ok(hostSource.includes("from 'node:fs'"), 'host half imports node:fs')
+ok(hostSource.includes("from 'node:zlib'"), 'host half imports node:zlib for session-log adoption')
 ok(hostSource.includes('await fetch(config.balanceUrl'), 'host half uses fetch for the balance probe')
 
 const host = await import(new URL('../lib/index.js', import.meta.url).href)
@@ -127,9 +129,27 @@ const webServer = {
 const requestedServices = []
 const listeners = {}
 const effects = []
+/** 假的活会话注册表：子会话的 header.parentSession 指向父会话（侧边对话 / 子代理即如此）。 */
+const sessionHeaders = {}
+let sessionsAvailable = true
+const sessionsStub = {
+  get(id) {
+    if (sessionsAvailable !== true) return undefined
+    const header = sessionHeaders[id]
+    return header === undefined ? undefined : { id: id, header: header }
+  },
+  list() {
+    if (sessionsAvailable !== true) return []
+    return Object.keys(sessionHeaders).map((id) => ({ id: id, header: sessionHeaders[id] }))
+  },
+}
 const ctx = {
   on(event, callback) { (listeners[event] ??= []).push(callback) },
-  get(name) { requestedServices.push(name); return undefined },
+  get(name) {
+    requestedServices.push(name)
+    if (name === 'sessions') return sessionsStub
+    return undefined
+  },
   inject(_services, callback) { callback(ctx) },
   effect(callback, label) { effects.push(label); callback() },
   webServer,
@@ -292,6 +312,61 @@ near(afterRemount.totals.cost, payload.totals.cost, 'second apply does not doubl
 eq(afterRemount.rows.length, 4, 'second apply keeps rows de-duplicated')
 eq(afterRemount.store.path, STORE_PATH, 'second apply keeps the same store path')
 
+/* ---------------- 子会话归属：侧边对话 / 子代理的费用并进主对话 ---------------- */
+
+// 侧边对话与子代理都在**子会话**里跑模型调用：会话头写着 parentSession，
+// 而 llm/stream 上报的是子会话自己的会话 id。这里验证归并、开关、以及
+// 会话消失后靠存档里的 lineage 继续归并。
+sessionHeaders['child-sidechat'] = { id: 'child-sidechat', parentSession: 's-test', origin: 'subagent' }
+const CHILD = { provider: 'deepseek-official', model: 'deepseek-v4-pro', sessionId: 'child-sidechat' }
+
+await withClock('2026-09-14T02:00:00Z', async () => { await emit(CHILD, PRO_USAGE) })
+await withClock('2026-09-14T02:00:00Z', async () => { await emit(CHILD, PRO_USAGE) })
+state = (await call('state', { sessionId: 's-test' })).payload
+eq(state.totals.calls, 6, 'totals count the child calls')
+eq(state.sessionTotals.calls, 6, 'conversation total merges the child session')
+near(state.sessionTotals.cost, 7.5 + 3.75 + 3.75 + 6.08 + 7.5 + 7.5, 'merged conversation cost')
+eq(state.children.length, 1, 'children list has one entry')
+eq(state.children[0].sessionId, 'child-sidechat', 'children entry is the child session')
+eq(state.children[0].bucket.calls, 2, 'children entry counts the child calls')
+const childBucket = state.sessions.find((item) => item.key === 'child-sidechat')
+ok(childBucket !== undefined && childBucket.calls === 2, 'bySession still keeps the child separately (no double counting)')
+eq(state.ownerSessionId, 's-test', 'owner session id reported')
+
+// 单次口径跟着最近收口的那一轮（子会话的一轮也算）
+listeners['api-session/status'][0]('child-sidechat', false)
+state = (await call('state', { sessionId: 's-test' })).payload
+eq(state.lastTurn.sessionId, 'child-sidechat', 'last turn follows the most recent turn including children')
+
+// 开关立即生效：关掉后本对话只剩自己的花费
+await call('save', { sessionId: 's-test', config: { mergeChildSessions: false } })
+state = (await call('state', { sessionId: 's-test' })).payload
+eq(state.sessionTotals.calls, 4, 'merge off excludes the child')
+eq(state.children.length, 0, 'merge off reports no children')
+await call('save', { sessionId: 's-test', config: { mergeChildSessions: true } })
+state = (await call('state', { sessionId: 's-test' })).payload
+eq(state.sessionTotals.calls, 6, 'merge on includes the child again')
+
+// lineage 落档：子会话消失后仍能归并
+const flushedWithChild = await call('store', { sessionId: 's-test' })
+eq(flushedWithChild.status, 200, 'POST store with child rows -> 200')
+const storedWithChild = JSON.parse(readFileSync(STORE_PATH, 'utf8'))
+ok(storedWithChild.lineage !== undefined && storedWithChild.lineage['child-sidechat'] !== undefined, 'lineage persisted with the ledger')
+eq(storedWithChild.lineage['child-sidechat'].owner, 's-test', 'lineage records the parent session')
+
+sessionsAvailable = false
+host.apply(ctx, {
+  currency: '\u00a5',
+  balanceUrl: origin + '/fake-balance',
+  credentialRef: 'DEEPSEEK_API_KEY',
+})
+await new Promise((resolve) => setTimeout(resolve, 50))
+const afterGone = (await call('state', { sessionId: 's-test' })).payload
+eq(afterGone.children.length, 1, 'merge survives the child session being gone (from persisted lineage)')
+eq(afterGone.sessionTotals.calls, 6, 'merged total survives without the sessions service')
+near(afterGone.sessionTotals.cost, 7.5 + 3.75 + 3.75 + 6.08 + 7.5 + 7.5, 'merged cost survives without the sessions service')
+sessionsAvailable = true
+
 /* ---------------- 余额：fetch + .credentials.yaml ---------------- */
 
 const balance = await call('balance', { sessionId: 's-test' })
@@ -322,8 +397,45 @@ eq(cleared.payload.rows.length, 0, 'reset clears rows')
 
 /* ---------------- 只向 ctx 要过合理的东西 ---------------- */
 
-const badRequests = requestedServices.filter((name) => name !== 'credentials')
-eq(badRequests.length, 0, 'never asked ctx.get for anything but credentials (asked: ' + (badRequests.join(',') || 'none') + ')')
+const badRequests = requestedServices.filter((name) => name !== 'credentials' && name !== 'sessions')
+eq(badRequests.length, 0, 'never asked ctx.get for anything but credentials/sessions (asked: ' + (badRequests.join(',') || 'none') + ')')
+
+/* ---------------- 历史子会话收养 ---------------- */
+
+// 场景：子会话早已结束、账本里也没有它的归属，但它的会话日志第一行留着
+// parentSession。用一份合成的账本 + 一份合成的 zstd 会话日志验证收养。
+sessionsAvailable = false
+const legacyChild = 'child-legacy'
+const legacyLog = join(home, 'sessions', '--test-workspace--', legacyChild, 'session.v3.jsonl.zstd')
+mkdirSync(dirname(legacyLog), { recursive: true })
+writeFileSync(
+  legacyLog,
+  zstdCompressSync(Buffer.from(JSON.stringify({ type: 'session', version: 3, id: legacyChild, parentSession: 's-test' }) + '\n', 'utf8')),
+)
+writeFileSync(STORE_PATH, JSON.stringify({
+  version: 3,
+  savedAt: Date.now(),
+  config: {},
+  counter: 7,
+  totals: { calls: 7, cost: 39.58, hit: 0, miss: 0, write: 0, out: 0, offPeakCalls: 7 },
+  byModel: {},
+  byDay: {},
+  bySession: {
+    's-test': { calls: 6, cost: 36.08, hit: 0, miss: 0, write: 0, out: 0, offPeakCalls: 6 },
+    [legacyChild]: { calls: 1, cost: 3.5, hit: 0, miss: 0, write: 0, out: 0, offPeakCalls: 1 },
+  },
+  lastTurns: {},
+  rows: [],
+}), 'utf8')
+
+host.apply(ctx, { currency: '\u00a5', balanceUrl: origin + '/fake-balance', credentialRef: 'DEEPSEEK_API_KEY' })
+await new Promise((resolve) => setTimeout(resolve, 100))
+const adopted = (await call('state', { sessionId: 's-test' })).payload
+eq(adopted.children.length, 1, 'adopted the historical child session from its session log')
+eq(adopted.children[0].sessionId, legacyChild, 'adopted child id')
+eq(adopted.children[0].bucket.calls, 1, 'adopted child calls')
+near(adopted.sessionTotals.cost, 36.08 + 3.5, 'adopted child cost merged into the conversation')
+sessionsAvailable = true
 
 server.close()
 
