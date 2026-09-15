@@ -87,7 +87,7 @@ for (const forbidden of ["hostCtx.get('fs')", "hostCtx.get('settings')", "hostCt
 }
 ok(hostSource.includes("from 'node:fs'"), 'host half imports node:fs')
 ok(hostSource.includes("from 'node:zlib'"), 'host half imports node:zlib for session-log adoption')
-ok(hostSource.includes('await fetch(config.balanceUrl'), 'host half uses fetch for the balance probe')
+ok(hostSource.includes('await fetch(profile.url'), 'host half uses fetch against the resolved balance profile')
 
 const host = await import(new URL('../lib/index.js', import.meta.url).href)
 eq(host.name, 'dsh-token-feiyong', 'export name')
@@ -98,6 +98,10 @@ const registered = []
 let requestHandler = null
 let balanceAuth = ''
 let balanceHits = 0
+let financeAuth = ''
+let financeHits = 0
+let quotaAuth = ''
+let quotaHits = 0
 
 const server = createServer((request, response) => {
   if (request.url === '/fake-balance') {
@@ -108,6 +112,24 @@ const server = createServer((request, response) => {
       is_available: true,
       balance_infos: [{ currency: 'CNY', total_balance: '32.31', granted_balance: '5.00', topped_up_balance: '27.31' }],
     }))
+    return
+  }
+  if (request.url === '/fake-bigmodel') {
+    financeHits += 1
+    financeAuth = String(request.headers.authorization ?? '')
+    response.writeHead(200, { 'content-type': 'application/json' })
+    // 形状照抄智谱 /api/biz/account/query-customer-account-report 的实测响应
+    response.end(JSON.stringify({
+      code: 200, msg: '操作成功', success: true,
+      data: { balance: 19.94012911, rechargeAmount: 20, giveAmount: 0, totalSpendAmount: 0.05987089, frozenBalance: 0, creditStatus: 'NOT_OPEN' },
+    }))
+    return
+  }
+  if (request.url === '/fake-quota') {
+    quotaHits += 1
+    quotaAuth = String(request.headers.authorization ?? '')
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ code: 200, msg: 'success', success: true, data: { limits: [{ remaining: 3, number: 5 }] } }))
     return
   }
   if (requestHandler !== null) requestHandler(request, response)
@@ -422,9 +444,114 @@ near(overridden.pricePeak.cacheMiss, 2, 'overridden input price wins')
 const overriddenCost = state.rowsAll.find((row) => row.model === 'glm-5.3-flash').cost
 near(overriddenCost, (2000000 * 1 + 1000000 * 2 + 500000 * 3) / 1000000, 'overridden price is what gets billed')
 
+/* ---------------- 余额按供应商分流 ---------------- */
+
+// 先关掉余额请求，只验证「档位解析」与「不串数字」，避免测试访问真实网络
+await call('save', { sessionId: 's-glm', config: { showBalance: false } })
+
+await withClock('2026-09-14T02:00:00Z', async () => {
+  await emit({ provider: 'zai-coding-cn', model: 'glm-5.3-flash', sessionId: 's-glm' }, GLM_USAGE)
+})
+state = (await call('state', { sessionId: 's-glm' })).payload
+eq(state.balanceProfile.providerLabel, 'BigModel GLM', 'GLM session resolves to the BigModel profile')
+eq(state.balanceProfile.kind, 'bigmodel', 'GLM profile uses the BigModel finance endpoint')
+eq(state.balanceProfile.url, 'https://open.bigmodel.cn/api/biz/account/query-customer-account-report', 'GLM profile url')
+eq(state.balanceProfile.credentialRef, 'BIGMODEL_API_KEY', 'GLM profile uses BIGMODEL_API_KEY')
+eq(state.balance.providerLabel, 'BigModel GLM', 'the shown balance belongs to BigModel')
+eq(state.balance.total, 0, 'no DeepSeek amount leaks into a GLM session')
+
+// DeepSeek 会话仍是金额余额（上一段缓存下来的值，档位一致）
+await withClock('2026-09-14T02:00:00Z', async () => {
+  await emit({ provider: 'deepseek-official', model: 'deepseek-flash', sessionId: 's-balance' }, PRO_USAGE)
+})
+state = (await call('state', { sessionId: 's-balance' })).payload
+eq(state.balanceProfile.providerLabel, 'DeepSeek', 'DeepSeek session resolves to the DeepSeek profile')
+eq(state.balanceProfile.kind, 'auto', 'customized default url makes the DeepSeek profile auto-detect the shape')
+eq(state.balanceProfile.activeModel, 'deepseek-flash', 'DeepSeek session keeps its own last model')
+
+// provider 叫 openai、模型是 glm-* 时，按模型名归到智谱
+await withClock('2026-09-14T02:00:00Z', async () => {
+  await emit({ provider: 'openai', model: 'glm-5.3', sessionId: 's-glm2' }, GLM_USAGE)
+})
+state = (await call('state', { sessionId: 's-glm2' })).payload
+eq(state.balanceProfile.kind, 'bigmodel', 'openai/glm-* resolves to the GLM profile by model name')
+eq(state.balance.providerLabel, 'BigModel GLM', 'and shows the BigModel label')
+
+// 智谱财务接口解析（走本地假端点）：balance/rechargeAmount/giveAmount 对上余额/充值/赠金
+await call('save', {
+  sessionId: 's-glm',
+  config: {
+    showBalance: true,
+    balanceProfiles: {
+      'zai-coding-cn': {
+        url: origin + '/fake-bigmodel',
+        credentialRef: 'DEEPSEEK_API_KEY',
+        kind: 'bigmodel',
+        providerLabel: 'BigModel GLM',
+        label: '余额',
+      },
+    },
+  },
+})
+const finance = await call('balance', { sessionId: 's-glm' })
+eq(finance.status, 200, 'POST balance (GLM) -> 200')
+eq(finance.payload.balance.ok, true, 'GLM finance ok')
+eq(finance.payload.balance.kind, 'balance', 'GLM finance reports money, not quota')
+near(finance.payload.balance.total, 19.94012911, 'GLM balance')
+near(finance.payload.balance.toppedUp, 20, 'GLM rechargeAmount -> 充值')
+near(finance.payload.balance.granted, 0, 'GLM giveAmount -> 赠金')
+eq(finance.payload.balance.providerLabel, 'BigModel GLM', 'GLM finance belongs to BigModel')
+ok(financeHits > 0, 'the BigModel endpoint was actually called')
+eq(financeAuth, 'test-key-from-file', 'BigModel request sent the raw key')
+
+// 配额接口仍可用（Coding Plan 账号）：自定义档位 kind=zhipu-quota
+await call('save', {
+  sessionId: 's-glm',
+  config: {
+    balanceProfiles: {
+      'zai-coding-cn': {
+        url: origin + '/fake-quota',
+        credentialRef: 'DEEPSEEK_API_KEY',
+        kind: 'zhipu-quota',
+        providerLabel: 'BigModel GLM',
+        label: '配额',
+      },
+    },
+  },
+})
+const quota = await call('balance', { sessionId: 's-glm' })
+eq(quota.payload.balance.ok, true, 'quota profile still works')
+eq(quota.payload.balance.quotaText, '3/5', 'quota text parsed from limits')
+eq(quota.payload.balance.kind, 'quota', 'quota kind')
+ok(quotaHits > 0, 'the quota endpoint was actually called')
+
+// 未知供应商：把默认余额地址还原成内置值后，不得套用别家数字。
+// （用户若显式配置过默认地址，那属于他自己设的兜底档位，这里不覆盖那种情况。）
+await call('save', { sessionId: 's-unknown', config: { balanceUrl: 'https://api.deepseek.com/user/balance' } })
+await withClock('2026-09-14T02:00:00Z', async () => {
+  await emit({ provider: 'some-other-vendor', model: 'mystery-model', sessionId: 's-unknown' }, PRO_USAGE)
+})
+state = (await call('state', { sessionId: 's-unknown' })).payload
+eq(state.balanceProfile.kind, 'none', 'unknown provider has no balance profile')
+eq(state.balance.total, 0, 'unknown provider shows no foreign amount')
+eq(state.balance.providerLabel, '', 'unknown provider has no borrowed label')
+
+// 重启后回填：remount 会重新读账本，会话最近的模型应当来自账本而不是空的。
+// 先清掉上面为配额用例加的自定义档位，这样验证的是「内置 GLM 档位」。
+await call('save', { sessionId: 's-glm', config: { showBalance: false, balanceProfiles: {} } })
+host.apply(ctx, { currency: '\u00a5', balanceUrl: origin + '/fake-balance', credentialRef: 'DEEPSEEK_API_KEY' })
+await new Promise((resolve) => setTimeout(resolve, 60))
+state = (await call('state', { sessionId: 's-glm' })).payload
+eq(state.balanceProfile.kind, 'bigmodel', 'after a remount the GLM session still resolves to GLM (seeded from the ledger)')
+eq(state.balanceProfile.activeModel, 'glm-5.3-flash', 'and its last model comes from the ledger')
+
 /* ---------------- 余额：fetch + .credentials.yaml ---------------- */
 
-const balance = await call('balance', { sessionId: 's-test' })
+// 余额按「该会话最近一次调用的供应商」分流，所以显式用一个 DeepSeek 会话。
+await withClock('2026-09-14T02:00:00Z', async () => {
+  await emit({ provider: 'deepseek-official', model: 'deepseek-flash', sessionId: 's-balance' }, PRO_USAGE)
+})
+const balance = await call('balance', { sessionId: 's-balance' })
 eq(balance.status, 200, 'POST balance -> 200')
 eq(balance.payload.balance.ok, true, 'balance ok')
 near(balance.payload.balance.total, 32.31, 'balance total')

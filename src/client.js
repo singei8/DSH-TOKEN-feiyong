@@ -339,6 +339,16 @@ return {
       const childCost = childList.reduce(function (sum, item) { return sum + item.bucket.cost }, 0)
       const showBalance = config.showBalance !== false
       const balanceOk = balance !== undefined && balance !== null && balance.ok === true
+      const balanceKind = (balance !== undefined && balance !== null && typeof balance.kind === 'string') ? balance.kind : 'balance'
+      const balanceLabel = (balance !== undefined && balance !== null && typeof balance.label === 'string' && balance.label.length > 0) ? balance.label : '余额'
+      const balanceLoading = balance !== undefined && balance !== null && balance.loading === true
+      /** 这份余额属于哪个供应商：先看余额本身，再看当前档位。 */
+      const balanceProviderOf = function () {
+        if (balance !== undefined && balance !== null && typeof balance.providerLabel === 'string' && balance.providerLabel.length > 0) return balance.providerLabel
+        const profile = state.balanceProfile
+        if (profile !== undefined && profile !== null && typeof profile.providerLabel === 'string') return profile.providerLabel
+        return ''
+      }
       const storeBroken = config.persist !== false && store !== null
         && (store.ready !== true || (typeof store.error === 'string' && store.error.length > 0))
       const tipLines = [
@@ -360,14 +370,19 @@ return {
       }
       tipLines.push('今日总花费 ' + fmtMoney(today.cost, config.currency) + '（' + String(today.calls) + ' 次调用）')
       if (showBalance) {
-        if (balanceOk) {
-          tipLines.push('账户余额 ' + fmtMoney(balance.total, balanceSymbol(balance, config.currency))
+        const who = balanceProviderOf()
+        const tag = balanceLabel + (who.length > 0 ? '（' + who + '）' : '')
+        if (balanceOk && balanceKind === 'quota') {
+          tipLines.push(tag + ' ' + String(balance.quotaText === undefined ? '' : balance.quotaText))
+          tipLines.push('  该供应商只提供配额查询，不提供金额余额')
+        } else if (balanceOk) {
+          tipLines.push(tag + ' ' + fmtMoney(balance.total, balanceSymbol(balance, config.currency))
             + '（赠金 ' + fmtMoney(balance.granted, balanceSymbol(balance, config.currency))
             + ' / 充值 ' + fmtMoney(balance.toppedUp, balanceSymbol(balance, config.currency)) + '）')
         } else if (balance !== undefined && balance !== null && typeof balance.error === 'string' && balance.error.length > 0) {
-          tipLines.push('余额获取失败：' + balance.error)
+          tipLines.push(tag + '获取失败：' + balance.error)
         } else {
-          tipLines.push('余额获取中…')
+          tipLines.push(tag + '获取中…')
         }
       }
       if (storeBroken) {
@@ -391,10 +406,12 @@ return {
       ]
       if (showBalance) {
         children.push(React.createElement('span', { className: 'tb-sep' }, '·'))
-        children.push(React.createElement('span', null, '余额 '))
+        children.push(React.createElement('span', null, balanceLabel + ' '))
         children.push(React.createElement('b', null, balanceOk
-          ? fmtMoney(balance.total, balanceSymbol(balance, config.currency))
-          : '…'))
+          ? (balanceKind === 'quota'
+            ? String(balance.quotaText === undefined ? '' : balance.quotaText)
+            : fmtMoney(balance.total, balanceSymbol(balance, config.currency)))
+          : (balanceLoading ? '…' : '—')))
       }
       if (storeBroken) {
         children.push(React.createElement('span', { className: 'tb-sep' }, '·'))
@@ -593,11 +610,26 @@ return {
       })
 
       const balanceCard = (function () {
-        if (config.showBalance === false) return card('账户余额', '已关闭', '在下方打开')
-        if (balance === null) return card('账户余额', '读取中…')
-        if (balance.ok !== true) return card('账户余额', (balance.error === undefined || balance.error === null || balance.error.length === 0) ? '获取失败' : balance.error, '点“刷新余额”重试', true)
-        return card('账户余额', fmtMoney(balance.total, balanceSymbolText),
+        const profile = state.balanceProfile
+        const providerLabel = (profile !== undefined && profile !== null && typeof profile.providerLabel === 'string' && profile.providerLabel.length > 0) ? profile.providerLabel : ''
+        const title = '账户' + ((balance !== null && typeof balance.label === 'string' && balance.label.length > 0) ? balance.label : '余额')
+          + (providerLabel.length > 0 ? '（' + providerLabel + '）' : '')
+        if (config.showBalance === false) return card(title, '已关闭', '在下方打开')
+        if (balance === null) return card(title, '读取中…')
+        if (balance.ok !== true) return card(title, (balance.error === undefined || balance.error === null || balance.error.length === 0) ? '获取失败' : balance.error, '点“刷新余额”重试', true)
+        if (balance.kind === 'quota') return card(title, String(balance.quotaText === undefined ? '' : balance.quotaText), '该供应商只提供配额查询，不提供金额余额')
+        return card(title, fmtMoney(balance.total, balanceSymbolText),
           '赠金 ' + fmtMoney(balance.granted, balanceSymbolText) + ' · 充值 ' + fmtMoney(balance.toppedUp, balanceSymbolText))
+      })()
+
+      /** 当前模型 -> 余额来源，用来看清"这个数字是谁的"。 */
+      const providerBalanceCard = (function () {
+        const profile = state.balanceProfile
+        if (profile === undefined || profile === null) return null
+        const activeModel = (typeof profile.activeModel === 'string' && profile.activeModel.length > 0) ? profile.activeModel : '尚未调用'
+        const url = (typeof profile.url === 'string' && profile.url.length > 0) ? String(profile.url).replace(/^https?:\/\//, '') : '未配置余额接口'
+        const providerLabel = (typeof profile.providerLabel === 'string' && profile.providerLabel.length > 0) ? profile.providerLabel : String(profile.activeProvider === undefined ? '' : profile.activeProvider)
+        return card('当前模型 · 余额来源', activeModel, (providerLabel.length > 0 ? providerLabel + ' · ' : '') + url)
       })()
 
       const storeCard = (function () {
@@ -678,7 +710,10 @@ return {
           React.createElement('span', { className: 'tb-badge ' + (enabled ? (phase.offPeak ? 'tb-badge-off' : 'tb-badge-peak') : '') },
             enabled ? (stateLabel(phase) + ' · ' + phase.dayLabel + ' ' + phase.clock) : '已关闭'),
           balance !== null && balance.ok === true
-            ? React.createElement('span', { className: 'tb-badge tb-badge-bal' }, '余额 ' + fmtMoney(balance.total, balanceSymbolText))
+            ? React.createElement('span', { className: 'tb-badge tb-badge-bal' },
+              (balance.kind === 'quota' ? '配额 ' : '余额 ')
+                + (balance.kind === 'quota' ? String(balance.quotaText === undefined ? '' : balance.quotaText) : fmtMoney(balance.total, balanceSymbolText))
+                + (typeof balance.providerLabel === 'string' && balance.providerLabel.length > 0 ? '（' + balance.providerLabel + '）' : ''))
             : null),
         React.createElement('div', { className: 'tb-head' },
           React.createElement('button', { className: 'tb-chip' + (enabled ? ' tb-chip-on' : ''), disabled: busy, onClick: toggleEnabled },
@@ -709,6 +744,7 @@ return {
         React.createElement('div', { className: 'tb-section-title' }, '账户'),
         React.createElement('div', { className: 'tb-cards' }, [
           balanceCard,
+          providerBalanceCard,
           storeCard,
           card('当前时段', React.createElement('span', { className: stateClass(phase) }, stateLabel(phase)),
             phase.dayLabel + ' ' + phase.clock + ' · ' + phase.peakDaysText + ' ' + phase.peakWindowsText),
@@ -755,8 +791,8 @@ return {
         React.createElement('div', { className: 'tb-head' },
           field('币种符号', editing.currency, function (value) { change({ currency: value.slice(0, 4) }) }, '如 ¥ / $'),
           field('时区偏移（分钟）', editing.utcOffsetMinutes, function (value) { change({ utcOffsetMinutes: value }) }, '北京时间 = 480'),
-          field('凭据引用', editing.credentialRef, function (value) { change({ credentialRef: value }) }, '默认 DEEPSEEK_API_KEY'),
-          field('余额接口', editing.balanceUrl, function (value) { change({ balanceUrl: value }) }),
+          field('默认凭据引用', editing.credentialRef, function (value) { change({ credentialRef: value }) }, '仅在当前供应商没有专用余额档位时使用'),
+          field('默认余额接口', editing.balanceUrl, function (value) { change({ balanceUrl: value }) }, 'DeepSeek 与智谱已内置；改这里等于配置兜底档位'),
           field('低谷比例（批量填充用）', editing.offPeakRatio, function (value) { change({ offPeakRatio: value }) }, '0.5 = 五折'),
           React.createElement('button', { className: 'tb-btn', onClick: fillOffPeak }, '低谷 = 高峰 × 比例')),
         React.createElement('div', { className: 'tb-head' },

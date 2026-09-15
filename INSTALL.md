@@ -91,6 +91,7 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modul
 | 宿主路由 | `curl -X POST -H "x-dsh-token-feiyong: 1" http://127.0.0.1:3080/dsh-token-feiyong/state` → JSON 快照 |
 | 首次调用后 | 生成存档 `<DSH_HOME>/token-billing-ledger.json`（通常 `~/.dsh/token-billing-ledger.json`） |
 | 子会话并入 | 打开侧边对话提问后，主对话的「本对话」包含该花费；设置页出现「本对话的子会话」表 |
+| 余额按供应商 | 切到 GLM 会话后徽标显示的是智谱余额（设置页「当前模型 · 余额来源」会写明接口地址） |
 | Host 日志 | 含 `[billing]` 前缀的行：`apply:` / `http: mounted 5 routes` / `store: ready` / `adopted N historical child session(s)` |
 
 改过 `lib/index.js` 或 `src/client.js` 后跑一次 `node scripts/check.mjs`：它会真起一个 HTTP 服务
@@ -107,9 +108,10 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modul
 - **落盘**：账本用 `node:fs` 直接读写 `<DSH_HOME>/token-billing-ledger.json`。
   **不需要任何 `fs` 服务** —— 插件挂在 profile 根级，看不见按作用域提供的 `fs`/`shell`，
   早期版本正是因此报「存档异常 / fs 服务不可用」。
-- **余额**：用 `fetch` 请求 `https://api.deepseek.com/user/balance`（只读 GET）。
-  凭据按 `env` → `credentials` 服务 → `<DSH_HOME>/.credentials.yaml` 的 `refs` 段依次尝试，
-  默认引用名 `DEEPSEEK_API_KEY`。**不需要 `shell`**，也不再起子进程。
+- **余额（按供应商）**：DeepSeek 用 `DEEPSEEK_API_KEY` 请求 `/user/balance`；
+  智谱 GLM 用 `BIGMODEL_API_KEY` 请求 `open.bigmodel.cn/api/biz/account/query-customer-account-report`。
+  凭据按 `env` → `credentials` 服务 → `<DSH_HOME>/.credentials.yaml` 的 `refs` 段依次尝试。
+  **不需要 `shell`**，也不起子进程；档位由「该会话最近一次调用的供应商」决定。
 - 插件不发送任何遥测；API Key 不写日志、不下发前端、不进命令行参数。
 
 改过 `lib/index.js` 或 `src/client.js` 后：

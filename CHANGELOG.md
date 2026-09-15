@@ -2,6 +2,43 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个版本对应一次 GitHub Release。
 
+## [1.4.0] — 2026-09-16
+
+**余额按供应商分流：切到 GLM 后显示的就是智谱的余额。**
+
+在此之前插件只有一套余额配置（DeepSeek 的地址与凭据），所以不管用哪个模型，
+徽标显示的都是 DeepSeek 的余额 —— 数字张冠李戴。
+
+### 新增
+
+- **按供应商选余额档位**：按「该会话最近一次调用的 provider/model」解析档位，
+  顺序为 用户配置 → 内置 DeepSeek（provider 精确/前缀）→ 内置智谱 → 按模型名前缀
+  （`glm*` 归智谱、`deepseek*` 归 DeepSeek）。每个档位独立请求、独立缓存。
+- **智谱 GLM 余额**：`GET https://open.bigmodel.cn/api/bigmodel/... ` 见下（实测可用）：
+  `GET https://open.bigmodel.cn/api/biz/account/query-customer-account-report`
+  （`Authorization: <key>`，裸 key 或 Bearer 均可）
+  → `{ code: 200, data: { balance, rechargeAmount, giveAmount, totalSpendAmount } }`，
+  分别对应「余额 / 充值 / 赠金」。该接口是从智谱控制台财务页的 JS 里挖出来的，官方文档未列。
+- **重启后回填**：载入账本时回填「每个会话最近一次调用的模型」，
+  否则重启后所有会话会先按全局最后一个模型取余额（又会短暂串号）。
+- **智谱配额档位**（可选）：`/api/monitor/usage/quota/limit` 仍支持，
+  把档位的 `kind` 设为 `zhipu-quota` 即按「配额 x/y」显示（Coding Plan 账号用）。
+
+### 修复
+
+- 内置档位一度盖过用户配置的默认余额地址：现在若用户改过全局「默认余额接口」，
+  **DeepSeek 系**供应商沿用该地址与凭据（兼容代理/换 key），其它供应商不受影响。
+- `billing/balance` 路由此前不带档位调用 `kickBalance`，导致手动「刷新余额」查的是
+  「未知供应商」；现在带上该会话解析出的档位。
+
+### 实测（真实 key，2026-09-16）
+
+- GLM 会话（`zai-coding-cn/glm-5.3-flash`）→ `BigModel GLM`，**¥19.94012911**
+  （充值 ¥20 / 赠金 ¥0 / 累计消费 ¥0.0599）。
+- DeepSeek 会话 → `DeepSeek`，**¥112.95**。
+- 未配置档位的供应商 → 不显示任何金额（`kind: none`）。
+- 自检 **168 项**全过。
+
 ## [1.3.1] — 2026-09-13
 
 **修正 v1.3.0 里补错的模型：第二个档位应为 GLM-5.3，不是 GLM-4.7。**

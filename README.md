@@ -29,7 +29,7 @@
 | 🏷️ **多档单价** | 单价按「用户 `provider/model` → 用户 模型名 → 内置官方表 → `default`」匹配；内置表含 DeepSeek 与智谱 GLM，设置页可增删档位覆盖内置价 |
 | 📊 **输入框徽标** | 输入框下方常驻：`● 高峰 · 单次 ¥0.012 · 本对话 ¥1.410 · 今日 ¥1.410 · 余额 ¥32.31`，鼠标悬停看明细 |
 | ⚙️ **设置页「费用统计」** | 侧边栏 设置 → 费用统计：账户、单次、今日、累计、按模型（含实际计价档）、最近请求、单价与时段配置 |
-| 💰 **账户余额** | 读取本地凭据调用 DeepSeek `/user/balance`，显示余额、赠金、充值拆分 |
+| 💰 **按供应商的余额** | 余额跟着**当前会话最近使用的供应商**走：DeepSeek 走 `/user/balance`，智谱 GLM 走控制台财务接口；切换模型即切换余额，不会拿别家的数字顶替 |
 | 💾 **数据落盘** | 明细 + 累计 + 单次记录 + 全部配置写入本地存档；插件更新 / DSH 重启后**合并读回**，累计不回退 |
 | 🧵 **子会话并入** | 侧边对话（better-sidebar）与子代理都跑在**子会话**里。它们的花费按会话头的 `parentSession` 归并进所属主对话的「本对话」与「单次」，设置页可切换为单独统计 |
 | 🔘 **总开关** | 一键启用 / 关闭（关闭后隐藏徽标并停止余额请求，但计费仍在后台记录，不丢数据） |
@@ -155,6 +155,10 @@ node scripts/check.mjs   # 87 项自检：真起 HTTP 服务跑通记账、分�
 - **API Key**：仅由 Host 侧按 `env` → `credentials` 服务 → `<DSH_HOME>/.credentials.yaml` 的 `refs` 段解析，只用于那条余额查询请求的 `Authorization` 头；**不进入命令行参数、不写入日志、不下发到前端**。
 - **余额查询**：用 `fetch` 对 `https://api.deepseek.com/user/balance` 发起一条只读 GET，20 秒超时；不经过任何子进程。
 - **存档路径**：`<DSH_HOME>/token-billing-ledger.json`（例如 `~/.dsh/token-billing-ledger.json`），格式见 [`examples/ledger.sample.json`](examples/ledger.sample.json)。
+- **余额来源**：按当前供应商选一个档位再请求，都是只读 GET，密钥只进请求头：
+  - DeepSeek：`https://api.deepseek.com/user/balance`（`Authorization: Bearer`）
+  - 智谱 GLM：`https://open.bigmodel.cn/api/biz/account/query-customer-account-report`（`Authorization: <key>`）
+  - 没有匹配档位的供应商**不显示任何金额**，只说明「没有配置余额接口」，避免拿别家的数字顶替。
 - **子会话归属**：运行中用宿主 `sessions` 服务读会话头的 `parentSession`（只读一个字符串）。
   对升级前就存在、如今已结束因而查不到归属的子会话，会读它自己的会话日志
   `<DSH_HOME>/sessions/<工作区>/<会话 id>/session.v3.jsonl.zstd` 的**第一帧**——只解析第一行
