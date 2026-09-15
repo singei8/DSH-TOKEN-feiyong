@@ -1,6 +1,6 @@
 {
   "name": "dsh-token-feiyong",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "DSH（DeepSeek Harness）token 计费插件：内置官方价目表（DeepSeek 分高峰低谷，智谱 GLM 另计），逐笔计算花费（缓存命中 / 未命中 / 输出），含账户余额、单次与本对话统计，侧边对话与子代理的花费并入所属主对话，数据本地持久化。",
   "type": "module",
   "main": "lib/index.js",

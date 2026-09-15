@@ -372,11 +372,11 @@ sessionsAvailable = true
 // 账本里存过的 config.prices 会整体替换「用户档位」，所以新增模型单价必须靠内置表兜底，
 // 否则老安装升级后，新模型仍会按 default（DeepSeek Flash）计价。
 const GLM_FLASH = { provider: 'openai', model: 'glm-5.3-flash', sessionId: 's-test' }
-const GLM_47 = { provider: 'openai', model: 'glm-4.7', sessionId: 's-test' }
+const GLM_53 = { provider: 'openai', model: 'glm-5.3', sessionId: 's-test' }
 const GLM_USAGE = { inputTokens: 1000000, outputTokens: 500000, cacheReadTokens: 2000000, cacheWriteTokens: 0, reasoningTokens: 0 }
 
 await withClock('2026-09-14T02:00:00Z', async () => { await emit(GLM_FLASH, GLM_USAGE) })
-await withClock('2026-09-14T12:00:00Z', async () => { await emit(GLM_47, GLM_USAGE) })
+await withClock('2026-09-14T12:00:00Z', async () => { await emit(GLM_53, GLM_USAGE) })
 state = (await call('state', { sessionId: 's-test' })).payload
 
 const glmFlashRow = state.byModel.find((entry) => entry.key === 'openai/glm-5.3-flash')
@@ -390,13 +390,19 @@ near(glmFlashRow.pricePeak.output, 2.8, 'GLM-5.3-Flash output price')
 const glmFlashCost = state.rowsAll.find((row) => row.model === 'glm-5.3-flash').cost
 near(glmFlashCost, (2000000 * 0.23 + 1000000 * 0.8 + 500000 * 2.8) / 1000000, 'GLM-5.3-Flash cost math (peak)')
 
-const glm47Row = state.byModel.find((entry) => entry.key === 'openai/glm-4.7')
-eq(glm47Row.priceMatch, 'builtin', 'GLM-4.7 resolves from the builtin table')
-eq(glm47Row.priceKey, 'glm-4.7', 'GLM-4.7 builtin key')
-near(glm47Row.priceOff.output, 16, 'GLM-4.7 off-peak output price')
-const glm47 = state.rowsAll.find((row) => row.model === 'glm-4.7')
-eq(glm47.offPeak, true, 'the GLM-4.7 call landed in off-peak hours')
-near(glm47.cost, (2000000 * 0.8 + 1000000 * 4 + 500000 * 16) / 1000000, 'GLM 不分高峰低谷，两档同价')
+const glm53Row = state.byModel.find((entry) => entry.key === 'openai/glm-5.3')
+eq(glm53Row.priceMatch, 'builtin', 'GLM-5.3 resolves from the builtin table')
+eq(glm53Row.priceKey, 'glm-5.3', 'GLM-5.3 builtin key')
+near(glm53Row.pricePeak.cacheHit, 2, 'GLM-5.3 cache-hit price')
+near(glm53Row.pricePeak.cacheMiss, 8, 'GLM-5.3 input price')
+near(glm53Row.pricePeak.output, 28, 'GLM-5.3 output price')
+// 无高峰/低谷：同一个模型在两套单价下必须相同
+near(glm53Row.priceOff.cacheHit, glm53Row.pricePeak.cacheHit, 'GLM-5.3 has no peak/off-peak split (cache hit)')
+near(glm53Row.priceOff.cacheMiss, glm53Row.pricePeak.cacheMiss, 'GLM-5.3 has no peak/off-peak split (input)')
+near(glm53Row.priceOff.output, glm53Row.pricePeak.output, 'GLM-5.3 has no peak/off-peak split (output)')
+const glm53 = state.rowsAll.find((row) => row.model === 'glm-5.3')
+eq(glm53.offPeak, true, 'the GLM-5.3 call landed in off-peak hours')
+near(glm53.cost, (2000000 * 2 + 1000000 * 8 + 500000 * 28) / 1000000, 'GLM 无高低峰，低谷时段同样计价')
 
 // 用户同名档位优先级更高，可以覆盖内置表
 await call('save', {
