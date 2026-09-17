@@ -86,7 +86,7 @@ dsh plugin --profile web add link:E:/path/to/DSH-TOKEN-feiyong   # 本地克隆�
 
 ```powershell
 node scripts/build.mjs   # 只重建客户端半边：src/client.js -> lib/client.js
-node scripts/check.mjs   # 204 项自检：真起 HTTP 服务跑通记账、分时计价、收口、node:fs 落盘、多供应商余额、方舟额度、slot 注册、重入（不打真网络）
+node scripts/check.mjs   # 205 项自检：真起 HTTP 服务跑通记账、分时计价、收口、node:fs 落盘、多供应商余额、方舟额度、slot 注册、重入（不打真网络）
 ```
 
 插件对宿主能力是**可选依赖**：`webServer`、`llm`、`credentials`、`shell`、`fs`、`settings` 任一缺失时，对应功能降级并在界面上说明，不会让整个插件挂掉。
@@ -227,7 +227,7 @@ DSH-TOKEN-feiyong/
 │  └─ host.js                   # 动态包时代的宿主半边，历史参考，不再参与构建
 ├─ scripts/
 │  ├─ build.mjs                 # 定点变换 + 断言：src/client.js -> lib/client.js
-│  └─ check.mjs                 # 自检 204 项：真起 HTTP 服务跑通路由、记账、分时、node:fs 落盘、多供应商余额、方舟额度、slot
+│  └─ check.mjs                 # 自检 205 项：真起 HTTP 服务跑通路由、记账、分时、node:fs 落盘、多供应商余额、方舟额度、slot
 ├─ cordis.patch.yml             # dsh.bundle.patch：把本插件插入 profile 的层叠配置
 ├─ docs/
 │  ├─ billing-explained.html    # 「本对话」计费逻辑可视化：流程图 / 公式 / 逐笔回放 / 计算器

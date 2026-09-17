@@ -8,7 +8,7 @@
 | 宿主 | `lib/index.js` | DSH 的 Node 进程（拦截模型调用、计费、余额、落盘） |
 | 客户端 | `lib/client.js` | 浏览器（输入框下方徽标 + 设置页「费用统计」） |
 | 构造 | 宿主半边直接改 `lib/index.js`；客户端半边改 `src/client.js` 后 `node scripts/build.mjs` | 两侧都不需要外部依赖 |
-| 自检 | `node scripts/check.mjs` | 204 项：计价 / 分时 / 收口 / node:fs 落盘 / 多供应商余额 / 方舟额度 / slot 注册 / 重入 |
+| 自检 | `node scripts/check.mjs` | 205 项：计价 / 分时 / 收口 / node:fs 落盘 / 多供应商余额 / 方舟额度 / slot 注册 / 重入 |
 
 ---
 
@@ -124,7 +124,7 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modul
 
 ```powershell
 node scripts/build.mjs   # 只重建 lib/client.js（宿主半边是直接维护的来源文件）
-node scripts/check.mjs   # 204 项自检
+node scripts/check.mjs   # 205 项自检
 ```
 
 ---
