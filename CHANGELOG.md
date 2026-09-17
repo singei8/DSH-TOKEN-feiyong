@@ -2,6 +2,41 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；每个版本对应一次 GitHub Release。
 
+## [1.5.0] — 2026-09-16
+
+**火山方舟 Agent Plan 改为额度统计。**
+
+你的方舟 provider 是 `volc-ark-coding`（baseURL `.../api/plan/v3` = Agent Plan 数据面），
+账号是**预付费额度制**：没有金额余额可查，只有 5h / weekly / monthly 三个窗口的额度用量。
+之前插件对任何供应商都只查 DeepSeek 的金额余额，切到方舟模型后显示的仍是 DeepSeek 的钱。
+
+### 新增
+
+- **新增档位类型 `ark-plan`**：内置到 provider `volc-ark-coding`，执行本机
+  `arkcli usage plan --format json`（与 arkcli 共用同一份 SSO 登录），解析
+  `items[].periods[]` 的 `label / used / total / percent / reset_at`。
+  徽标显示**用量占比最高**的那个窗口，悬停与设置页列出全部窗口及重置时间。
+- **档位支持外部命令**：档位可配 `command: { file, args }`；只有「裸命令名」在 Windows 上经
+  shell 执行（`arkcli` 是 `.cmd` 垫片），绝对路径交给 `execFile` 直接处理（避免空格问题）。
+  超时 30s、输出上限 4 MB。
+- 命令失败 / 未订阅 / 输出无法解析都会如实报错（例如 `当前账号没有生效的套餐订阅`），
+  不拿别家数字顶替。
+
+### 修复
+
+- 同一档位已有请求在飞时，`kickBalance` 现在**返回那个 promise**（等它完成），而不是立刻返回
+  旧快照 —— 否则手动「刷新余额」会读到上一次的值。
+
+### 实测
+
+- 自检 **176 项**全过（含用真实子进程验证「起进程 → 解析 → 展示字段」，以及未订阅、命令失败两条路径）。
+- 真实宿主里验证：插件在 DSH 进程内真的起 `arkcli`，取回 `agent-plan / personal / small`、
+  5h `19.1137/2000（0.96%）`、weekly `19.1137/7000（0.27%）`、monthly `118.2357/20000（0.59%）`，
+  徽标显示 `套餐额度 0.96%`。
+
+> 说明：套餐制模型没有按 token 的金额账单，所以费用（单次/本对话/…）目前仍是按 `default` 档
+> 算出的「列表价参考」，与套餐额度的消耗不是同一口径。
+
 ## [1.4.0] — 2026-09-16
 
 **余额按供应商分流：切到 GLM 后显示的就是智谱的余额。**

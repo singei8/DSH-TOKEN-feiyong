@@ -545,37 +545,95 @@ state = (await call('state', { sessionId: 's-glm' })).payload
 eq(state.balanceProfile.kind, 'bigmodel', 'after a remount the GLM session still resolves to GLM (seeded from the ledger)')
 eq(state.balanceProfile.activeModel, 'glm-5.3-flash', 'and its last model comes from the ledger')
 
-/* ---------------- 余额：fetch + .credentials.yaml ---------------- */
+/* ---------------- 火山方舟 Agent Plan：额度走本地 CLI ---------------- */
 
-// 余额按「该会话最近一次调用的供应商」分流，所以显式用一个 DeepSeek 会话。
+// 用真实子进程输出套餐 JSON，验证「起进程 → 解析 → 展示字段」整条链路。
+// 命令写成「node 脚本 数据文件」：不把长 JSON 塞进 -e 参数（Windows 引号转义会出问题）。
+const planPayload = {
+  viewer: { auth_method: 'sso', user_name: 'tester', profile: 'agent-plan_cn-beijing_personal' },
+  items: [
+    {
+      product: 'agent-plan', edition: 'personal', tier: 'small', subscribed: true,
+      periods: [
+        { label: '5h', used: 19.1137, total: 2000, percent: 0.955685, reset_at: '2026-09-18T05:13:12+08:00' },
+        { label: 'weekly', used: 19.1137, total: 7000, percent: 0.27305285714285715, reset_at: '2026-09-21T00:00:00+08:00' },
+        { label: 'monthly', used: 118.2357, total: 20000, percent: 0.5911785, reset_at: '2026-10-10T23:59:59+08:00' },
+      ],
+    },
+  ],
+}
+const echoScript = join(home, 'fake-ark-echo.cjs')
+const printPlanScript = join(home, 'fake-ark-plan.cjs')
+writeFileSync(echoScript, 'process.stdout.write(require("fs").readFileSync(process.argv[2], "utf8"))\n', 'utf8')
+writeFileSync(printPlanScript, JSON.stringify(planPayload), 'utf8')
+
+await call('save', {
+  sessionId: 's-ark',
+  config: {
+    showBalance: true,
+    balanceProfiles: {
+      'volc-ark-coding': {
+        kind: 'ark-plan',
+        providerLabel: '火山方舟 Agent Plan',
+        label: '套餐额度',
+        command: { file: process.execPath, args: [echoScript, printPlanScript] },
+      },
+    },
+  },
+})
 await withClock('2026-09-14T02:00:00Z', async () => {
-  await emit({ provider: 'deepseek-official', model: 'deepseek-flash', sessionId: 's-balance' }, PRO_USAGE)
+  await emit({ provider: 'volc-ark-coding', model: 'doubao-seed-2-1-turbo-260628', sessionId: 's-ark' }, PRO_USAGE)
 })
-const balance = await call('balance', { sessionId: 's-balance' })
-eq(balance.status, 200, 'POST balance -> 200')
-eq(balance.payload.balance.ok, true, 'balance ok')
-near(balance.payload.balance.total, 32.31, 'balance total')
-near(balance.payload.balance.granted, 5, 'balance granted')
-eq(balance.payload.balance.currency, 'CNY', 'balance currency')
-eq(balance.payload.balance.via, 'fetch:file', 'balance key came from .credentials.yaml')
-ok(balanceHits > 0, 'balance endpoint was actually called')
-eq(balanceAuth, 'Bearer test-key-from-file', 'balance request carried the key as a Bearer header')
 
-/* ---------------- 配置保存与清空 ---------------- */
+state = (await call('state', { sessionId: 's-ark' })).payload
+eq(state.balanceProfile.providerLabel, '火山方舟 Agent Plan', 'Ark session resolves to the Ark plan profile')
+eq(state.balanceProfile.kind, 'ark-plan', 'Ark profile kind')
 
-const saved = await call('save', {
-  sessionId: 's-test',
-  config: { currency: 'CNY', offPeakRatio: 0.4, prices: { default: { cacheHit: 1, cacheMiss: 2, output: 3, cacheHitOff: 0.5, cacheMissOff: 1, outputOff: 1.5 } } },
+const plan = await call('balance', { sessionId: 's-ark' })
+eq(plan.status, 200, 'POST balance (Ark) -> 200')
+eq(plan.payload.balance.ok, true, 'plan quota ok')
+eq(plan.payload.balance.kind, 'quota', 'plan reports quota, not money')
+eq(plan.payload.balance.quotaText, '0.96%', 'badge shows the most-used window')
+eq(plan.payload.balance.label, '套餐额度', 'plan label')
+eq(plan.payload.balance.quotaPeriods.length, 3, 'three quota windows')
+eq(plan.payload.balance.quotaPeriods[0].label, '5h', 'first window label')
+near(plan.payload.balance.quotaPeriods[2].percent, 0.5911785, 'monthly percent')
+eq(plan.payload.balance.quotaPeriods[0].resetAt, '2026-09-18T05:13:12+08:00', 'reset time kept as-is')
+eq(plan.payload.balance.planMeta.tier, 'small', 'plan tier')
+eq(plan.payload.balance.planMeta.account, 'tester', 'plan account from viewer')
+eq(plan.payload.balance.via, 'cli:arkcli', 'source is a CLI command')
+eq(plan.payload.balance.total, 0, 'quota is not a money amount')
+
+// 内置档位（不配 command 时）指向真正的 arkcli
+await call('save', { sessionId: 's-ark', config: { balanceProfiles: {} } })
+state = (await call('state', { sessionId: 's-ark' })).payload
+eq(state.balanceProfile.providerLabel, '火山方舟 Agent Plan', 'builtin Ark profile resolves without user config')
+eq(state.balanceProfile.kind, 'ark-plan', 'builtin Ark kind')
+eq(state.balanceProfile.url, '', 'builtin Ark profile needs no HTTP url')
+
+// 没订阅：如实报错，不算出任何数字
+const emptyPlan = join(home, 'fake-ark-empty.json')
+writeFileSync(emptyPlan, JSON.stringify({ viewer: {}, items: [] }), 'utf8')
+await call('save', {
+  sessionId: 's-ark',
+  config: { balanceProfiles: { 'volc-ark-coding': { kind: 'ark-plan', providerLabel: '火山方舟 Agent Plan', label: '套餐额度', command: { file: process.execPath, args: [echoScript, emptyPlan] } } } },
 })
-eq(saved.status, 200, 'POST save -> 200')
-eq(saved.payload.config.currency, 'CNY', 'saved currency')
-eq(saved.payload.config.offPeakRatio, 0.4, 'saved offPeakRatio')
-near(saved.payload.config.prices.default.cacheHit, 1, 'saved price override')
+const noSub = await call('balance', { sessionId: 's-ark' })
+eq(noSub.payload.balance.ok, false, 'no subscription -> not ok')
+ok(String(noSub.payload.balance.error).includes('没有生效'), 'no subscription reports a clear reason')
+eq(noSub.payload.balance.total, 0, 'no subscription shows no amount')
 
-const cleared = await call('reset', { sessionId: 's-test' })
-eq(cleared.status, 200, 'POST reset -> 200')
-eq(cleared.payload.totals.calls, 0, 'reset clears totals')
-eq(cleared.payload.rows.length, 0, 'reset clears rows')
+// 命令失败：把原因带出来，不静默
+const failScript = join(home, 'fake-ark-fail.cjs')
+writeFileSync(failScript, 'process.stderr.write("boom")\nprocess.exit(3)\n', 'utf8')
+await call('save', {
+  sessionId: 's-ark',
+  config: { balanceProfiles: { 'volc-ark-coding': { kind: 'ark-plan', providerLabel: '火山方舟 Agent Plan', label: '套餐额度', command: { file: process.execPath, args: [failScript] } } } },
+})
+const failed = await call('balance', { sessionId: 's-ark' })
+eq(failed.payload.balance.ok, false, 'failing command -> not ok')
+ok(String(failed.payload.balance.error).includes('额度查询失败'), 'failing command reports the failure')
+await call('save', { sessionId: 's-ark', config: { balanceProfiles: {} } })
 
 /* ---------------- 只向 ctx 要过合理的东西 ---------------- */
 

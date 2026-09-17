@@ -29,7 +29,7 @@
 | 🏷️ **多档单价** | 单价按「用户 `provider/model` → 用户 模型名 → 内置官方表 → `default`」匹配；内置表含 DeepSeek 与智谱 GLM，设置页可增删档位覆盖内置价 |
 | 📊 **输入框徽标** | 输入框下方常驻：`● 高峰 · 单次 ¥0.012 · 本对话 ¥1.410 · 今日 ¥1.410 · 余额 ¥32.31`，鼠标悬停看明细 |
 | ⚙️ **设置页「费用统计」** | 侧边栏 设置 → 费用统计：账户、单次、今日、累计、按模型（含实际计价档）、最近请求、单价与时段配置 |
-| 💰 **按供应商的余额** | 余额跟着**当前会话最近使用的供应商**走：DeepSeek 走 `/user/balance`，智谱 GLM 走控制台财务接口；切换模型即切换余额，不会拿别家的数字顶替 |
+| 💰 **按供应商的余额 / 额度** | 跟着**当前会话最近使用的供应商**走：DeepSeek 查 `/user/balance`（金额）、智谱 GLM 查控制台财务接口（金额）、**火山方舟 Agent Plan 跑本机 `arkcli usage plan` 取套餐额度**；切换模型即切换来源，不会拿别家的数字顶替 |
 | 💾 **数据落盘** | 明细 + 累计 + 单次记录 + 全部配置写入本地存档；插件更新 / DSH 重启后**合并读回**，累计不回退 |
 | 🧵 **子会话并入** | 侧边对话（better-sidebar）与子代理都跑在**子会话**里。它们的花费按会话头的 `parentSession` 归并进所属主对话的「本对话」与「单次」，设置页可切换为单独统计 |
 | 🔘 **总开关** | 一键启用 / 关闭（关闭后隐藏徽标并停止余额请求，但计费仍在后台记录，不丢数据） |
@@ -101,6 +101,9 @@ node scripts/check.mjs   # 87 项自检：真起 HTTP 服务跑通记账、分�
 | `glm-5.3-flash` | `glm-5.3-flash`（任意 provider） | **0.23** | **0.8** | **2.8** |
 
 > 内置表里还附带了 `glm-4.7`（官方按输入长度分三档，取输入 `[32K, 200K)` = ¥4 / ¥16 / 命中 ¥0.8）。
+>
+> **火山方舟 Agent Plan**（baseURL `.../api/plan/v3`）是**预付费额度制**，没有按 token 的金额账单；
+> 这类模型目前仍会按 `default` 档算出一个「列表价参考」数字，与套餐额度的消耗不是同一口径。
 > 要换档或想删掉，在设置页**新增同名档位**即可覆盖内置值（内置表只在配置里没有该模型时兜底）。
 
 ### 单价的匹配顺序
@@ -155,7 +158,9 @@ node scripts/check.mjs   # 87 项自检：真起 HTTP 服务跑通记账、分�
 - **API Key**：仅由 Host 侧按 `env` → `credentials` 服务 → `<DSH_HOME>/.credentials.yaml` 的 `refs` 段解析，只用于那条余额查询请求的 `Authorization` 头；**不进入命令行参数、不写入日志、不下发到前端**。
 - **余额查询**：用 `fetch` 对 `https://api.deepseek.com/user/balance` 发起一条只读 GET，20 秒超时；不经过任何子进程。
 - **存档路径**：`<DSH_HOME>/token-billing-ledger.json`（例如 `~/.dsh/token-billing-ledger.json`），格式见 [`examples/ledger.sample.json`](examples/ledger.sample.json)。
-- **余额来源**：按当前供应商选一个档位再请求，都是只读 GET，密钥只进请求头：
+- **余额来源**：按当前供应商选一个档位再请求。前两者是只读 GET，密钥只进请求头；方舟 Agent Plan 走本机 CLI：
+  - 火山方舟 Agent Plan：执行本机 `arkcli usage plan --format json`（与 arkcli 共用同一份 SSO 登录），
+    显示 5h / weekly / monthly 三个窗口的已用占比与重置时间；**没有金额**（套餐是预付费额度制）
   - DeepSeek：`https://api.deepseek.com/user/balance`（`Authorization: Bearer`）
   - 智谱 GLM：`https://open.bigmodel.cn/api/biz/account/query-customer-account-report`（`Authorization: <key>`）
   - 没有匹配档位的供应商**不显示任何金额**，只说明「没有配置余额接口」，避免拿别家的数字顶替。
