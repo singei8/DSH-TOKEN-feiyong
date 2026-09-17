@@ -178,6 +178,16 @@ const ctx = {
   logger: { info() {}, warn() {} },
 }
 
+/** 自检不打真网络：宿主半边的外部 HTTP 一律拦成假响应，本地假服务器照旧放行。
+ *  （用例里确实有几处配了「内置 DeepSeek 地址」来验证档位解析，真发出去会偶发
+ *  fetch failed，还会把真实余额读进断言里。） */
+const realOutboundFetch = globalThis.fetch
+globalThis.fetch = async (url, init) => {
+  if (String(url).indexOf(origin) === 0) return realOutboundFetch(url, init)
+  const body = JSON.stringify({ is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '32.31' }] })
+  return { ok: true, status: 200, text: async () => body, json: async () => JSON.parse(body) }
+}
+
 host.apply(ctx, {
   currency: '\u00a5',
   balanceUrl: origin + '/fake-balance',
@@ -567,6 +577,8 @@ const printPlanScript = join(home, 'fake-ark-plan.cjs')
 writeFileSync(echoScript, 'process.stdout.write(require("fs").readFileSync(process.argv[2], "utf8"))\n', 'utf8')
 writeFileSync(printPlanScript, JSON.stringify(planPayload), 'utf8')
 
+const ARK_META = { provider: 'volc-ark-coding', model: 'doubao-seed-2-1-turbo-260628', sessionId: 's-ark' }
+
 await call('save', {
   sessionId: 's-ark',
   config: {
@@ -635,6 +647,73 @@ eq(failed.payload.balance.ok, false, 'failing command -> not ok')
 ok(String(failed.payload.balance.error).includes('额度查询失败'), 'failing command reports the failure')
 await call('save', { sessionId: 's-ark', config: { balanceProfiles: {} } })
 
+/* ---------------- 套餐额度计量：消耗 + 剩余 ---------------- */
+
+// 用「改写额度数据文件」来模拟控制台的额度增长，从而估出 AFP/Token 比率。
+const raisedPlan = join(home, 'fake-ark-raised.json')
+writeFileSync(raisedPlan, JSON.stringify({
+  viewer: { user_name: 'tester' },
+  items: [{
+    product: 'agent-plan', edition: 'personal', tier: 'small', subscribed: true,
+    periods: [
+      { label: '5h', used: 20, total: 2000, percent: 1.0, reset_at: '2026-09-18T05:13:12+08:00' },
+      { label: 'weekly', used: 20, total: 7000, percent: 0.2857, reset_at: '2026-09-21T00:00:00+08:00' },
+      { label: 'monthly', used: 119, total: 20000, percent: 0.595, reset_at: '2026-10-10T23:59:59+08:00' },
+    ],
+  }],
+}), 'utf8')
+
+await call('save', {
+  sessionId: 's-ark',
+  config: {
+    showBalance: true,
+    balanceProfiles: {
+      'volc-ark-coding': {
+        kind: 'ark-plan', providerLabel: '火山方舟 Agent Plan', label: '套餐额度',
+        command: { file: process.execPath, args: [echoScript, printPlanScript] },
+      },
+    },
+  },
+})
+
+// 第一次快照：只建基准，不比出比率
+const baseline = await call('balance', { sessionId: 's-ark' })
+eq(baseline.payload.quota.muted, true, 'quota mode is on for the Ark profile')
+eq(baseline.payload.quota.remaining.length, 3, 'three remaining windows')
+near(baseline.payload.quota.remaining[0].remaining, 2000 - 19.1137, 'remaining = total - used')
+
+// 一次调用（此刻比率还是 0，额度记 0）
+await withClock('2026-09-14T02:00:00Z', async () => { await emit(ARK_META, PRO_USAGE) })
+
+// 控制台额度上涨 → 再取快照即可估出比率
+writeFileSync(printPlanScript, readFileSync(raisedPlan, 'utf8'), 'utf8')
+const risen = await call('balance', { sessionId: 's-ark' })
+eq(risen.payload.balance.ok, true, 'plan still ok after the raise')
+ok(risen.payload.quota.rate > 0, 'AFP/token rate estimated from the observed delta')
+near(risen.payload.quota.remaining[0].remaining, 2000 - 20, 'remaining follows the new snapshot')
+
+// 之后再调用：记额度、不计钱
+await withClock('2026-09-14T02:00:00Z', async () => { await emit(ARK_META, PRO_USAGE) })
+state = (await call('state', { sessionId: 's-ark' })).payload
+const arkModel = state.byModel.find((entry) => entry.key === 'volc-ark-coding/doubao-seed-2-1-turbo-260628')
+ok(arkModel !== undefined, 'quota-based model appears in byModel')
+eq(arkModel.cost, 0, 'quota-based model costs no money')
+ok(arkModel.quota > 0, 'quota-based model records quota usage')
+ok(state.sessionTotals.quota > 0, 'conversation quota usage accumulates')
+near(state.sessionTotals.quota, arkModel.quota, 'session quota equals the model quota here')
+
+// 收口后「单次」也带额度
+listeners['api-session/status'][0]('s-ark', false)
+state = (await call('state', { sessionId: 's-ark' })).payload
+ok(state.lastTurn.quota > 0, 'last turn carries quota usage')
+
+// 按量付费的模型不受影响
+await withClock('2026-09-14T02:00:00Z', async () => { await emit(PRO, PRO_USAGE) })
+state = (await call('state', { sessionId: 's-test' })).payload
+eq(state.quota.muted, false, 'money-based session is not in quota mode')
+ok(state.sessionTotals.cost > 0, 'money-based providers still accumulate cost')
+await call('save', { sessionId: 's-ark', config: { balanceProfiles: {} } })
+
 /* ---------------- 只向 ctx 要过合理的东西 ---------------- */
 
 const badRequests = requestedServices.filter((name) => name !== 'credentials' && name !== 'sessions')
@@ -677,7 +756,9 @@ eq(adopted.children[0].bucket.calls, 1, 'adopted child calls')
 near(adopted.sessionTotals.cost, 36.08 + 3.5, 'adopted child cost merged into the conversation')
 sessionsAvailable = true
 
-server.close()
+// 本地假服务器留到进程退出：宿主还有异步余额请求会晚到一两拍，
+// 提前 close() 会让它们变成 fetch failed。unref 让监听句柄不阻塞退出。
+server.unref()
 
 /* ================================================================== *
  * 2. 客户端半边：用 __ModuleLoader__ 加载并跑 apply
@@ -849,7 +930,81 @@ ok(typeof cleanup === 'function', 'effect returns a disposer')
 cleanup()
 eq(intervalClears, 1, 'disposer clears the interval')
 
+/* ---------------- 套餐制：徽标改说额度，不再出现金额 ---------------- */
+
+const textOf = function (node, out) {
+  if (node === null || node === undefined || typeof node === 'boolean') return out
+  if (Array.isArray(node)) {
+    for (const item of node) textOf(item, out)
+    return out
+  }
+  if (typeof node === 'object') {
+    if (node.children !== undefined) textOf(node.children, out)
+    return out
+  }
+  out.push(String(node))
+  return out
+}
+
+hookStates.length = 0
+hookCursor = 0
+miniEffects.length = 0
+globalThis.fetch = async () => ({
+  ok: true,
+  status: 200,
+  json: async () => ({
+    config: { enabled: true, showBalance: true, currency: '\u00a5' },
+    phase: {
+      offPeak: true, dayLabel: '周一', clock: '20:00', offsetLabel: '北京时间',
+      peakDaysText: '周一至周五', peakWindowsText: '09:00-12:00 / 14:00-18:00',
+    },
+    balance: {
+      ok: true, kind: 'quota', label: '套餐额度', providerLabel: '火山方舟 Agent Plan', quotaText: '0.96%',
+      quotaPeriods: [
+        { label: '5h', used: 19.1137, total: 2000, percent: 0.9557, resetAt: '2026-09-18T05:13:12+08:00' },
+        { label: 'weekly', used: 19.1137, total: 7000, percent: 0.2731, resetAt: '2026-09-21T00:00:00+08:00' },
+        { label: 'monthly', used: 118.2357, total: 20000, percent: 0.5912, resetAt: '2026-10-10T23:59:59+08:00' },
+      ],
+    },
+    store: { ready: true, savedAtText: '刚刚', path: 'ledger.json' },
+    lastTurn: { cost: 0, quota: 12.5, calls: 1, turn: 3, atText: '20:01', hit: 10, miss: 20, out: 30 },
+    todayTotals: { calls: 2, cost: 0 },
+    sessionTotals: { calls: 2, cost: 0, quota: 25, hit: 10, miss: 20, out: 30 },
+    totals: { calls: 2, cost: 0, quota: 25 },
+    children: [],
+    byModel: [],
+    quota: {
+      muted: true, rate: 0.0001,
+      remaining: [
+        { label: '5h', used: 19.1137, total: 2000, remaining: 1980.8863, percent: 0.9557, resetAt: '2026-09-18T05:13:12+08:00' },
+        { label: 'weekly', used: 19.1137, total: 7000, remaining: 6980.8863, percent: 0.2731, resetAt: '2026-09-21T00:00:00+08:00' },
+        { label: 'monthly', used: 118.2357, total: 20000, remaining: 19881.7643, percent: 0.5912, resetAt: '2026-10-10T23:59:59+08:00' },
+      ],
+    },
+  }),
+})
+
+meter({ sessionId: 's-ark' })
+miniEffects[miniEffects.length - 1]()
+await new Promise((resolve) => setTimeout(resolve, 0))
+hookCursor = 0
+const quotaElement = meter({ sessionId: 's-ark' })
+const quotaText = textOf(quotaElement, []).join('|')
+ok(quotaText.includes('单次'), 'quota badge keeps the 单次 metric')
+ok(quotaText.includes('12.5'), 'quota badge shows the quota burnt by the last turn')
+ok(quotaText.includes('本对话'), 'quota badge keeps the 本对话 metric')
+ok(quotaText.includes('25'), 'quota badge shows the quota burnt by the conversation')
+ok(quotaText.includes('5小时'), 'quota badge names the 5h window')
+ok(quotaText.includes('周额度'), 'quota badge names the weekly window')
+ok(quotaText.includes('月额度'), 'quota badge names the monthly window')
+ok(quotaText.includes('1981'), 'quota badge shows the remaining 5h quota')
+ok(quotaText.includes('19882'), 'quota badge shows the remaining monthly quota')
+ok(!quotaText.includes('\u00a5'), 'quota badge prints no money at all')
+ok(String(quotaElement.props.title).includes('额度口径'), 'quota badge tooltip explains the quota basis')
+ok(String(quotaElement.props.title).includes('5小时 已用 19.11/2000'), 'quota tooltip lists the window usage')
+
 globalThis.fetch = realFetch
+globalThis.fetch = realOutboundFetch
 
 rmSync(home, { recursive: true, force: true })
 
