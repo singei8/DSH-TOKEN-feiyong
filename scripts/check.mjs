@@ -707,6 +707,29 @@ listeners['api-session/status'][0]('s-ark', false)
 state = (await call('state', { sessionId: 's-ark' })).payload
 ok(state.lastTurn.quota > 0, 'last turn carries quota usage')
 
+// 控制台延迟出账：某一刻的快照没看到增量时，token 基准不能被推进，
+// 否则那段额度会被摊到之后的一小段 token 上，比率被高估。
+const flat = await call('balance', { sessionId: 's-ark' })
+eq(flat.payload.quota.rate, risen.payload.quota.rate, 'a lagging snapshot leaves the rate alone')
+await withClock('2026-09-14T02:00:00Z', async () => { await emit(ARK_META, PRO_USAGE) })
+const laggedPlan = join(home, 'fake-ark-lagged.json')
+writeFileSync(laggedPlan, JSON.stringify({
+  viewer: { user_name: 'tester' },
+  items: [{
+    product: 'agent-plan', edition: 'personal', tier: 'small', subscribed: true,
+    periods: [
+      { label: '5h', used: 21, total: 2000, percent: 1.05, reset_at: '2026-09-18T05:13:12+08:00' },
+      { label: 'weekly', used: 21, total: 7000, percent: 0.3, reset_at: '2026-09-21T00:00:00+08:00' },
+      { label: 'monthly', used: 120, total: 20000, percent: 0.6, reset_at: '2026-10-10T23:59:59+08:00' },
+    ],
+  }],
+}), 'utf8')
+writeFileSync(printPlanScript, readFileSync(laggedPlan, 'utf8'), 'utf8')
+const caught = await call('balance', { sessionId: 's-ark' })
+// 增量 20 -> 21 = 1.0；这期间攒下的 token 是「上一次真的用掉增量之后」的两笔
+// PRO_USAGE（每笔 1,600,000），不能只除最后一笔。
+near(caught.payload.quota.rate, 1 / 3200000, 'the lagging window is divided over all the tokens it covers')
+
 // 按量付费的模型不受影响
 await withClock('2026-09-14T02:00:00Z', async () => { await emit(PRO, PRO_USAGE) })
 state = (await call('state', { sessionId: 's-test' })).payload
