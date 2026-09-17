@@ -408,7 +408,10 @@ return {
       if (showBalance) {
         const who = balanceProviderOf()
         const tag = balanceLabel + (who.length > 0 ? '（' + who + '）' : '')
-        if (balanceOk && balanceKind === 'quota') {
+        if (quotaMode === true && balanceOk && balanceKind === 'quota') {
+          // 窗口明细上面已经逐条写过了（带剩余），这里只交代来源，避免重复两遍
+          tipLines.push(tag + ' 已读取（来源 ' + String(balance.via === undefined ? '' : balance.via) + '）')
+        } else if (balanceOk && balanceKind === 'quota') {
           tipLines.push(tag + ' ' + String(balance.quotaText === undefined ? '' : balance.quotaText))
           const quotaPeriods = Array.isArray(balance.quotaPeriods) ? balance.quotaPeriods : []
           for (let index = 0; index < quotaPeriods.length; index += 1) {

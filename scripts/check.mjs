@@ -1025,6 +1025,7 @@ ok(quotaText.includes('19882'), 'quota badge shows the remaining monthly quota')
 ok(!quotaText.includes('\u00a5'), 'quota badge prints no money at all')
 ok(String(quotaElement.props.title).includes('额度口径'), 'quota badge tooltip explains the quota basis')
 ok(String(quotaElement.props.title).includes('5小时 已用 19.11/2000'), 'quota tooltip lists the window usage')
+ok(String(quotaElement.props.title).split('5小时 已用').length === 2, 'the window list is not printed twice')
 
 globalThis.fetch = realFetch
 globalThis.fetch = realOutboundFetch
