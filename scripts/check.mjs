@@ -953,8 +953,9 @@ ok(typeof cleanup === 'function', 'effect returns a disposer')
 cleanup()
 eq(intervalClears, 1, 'disposer clears the interval')
 
-/* ---------------- 套餐制：徽标改说额度，不再出现金额 ---------------- */
+/* ---------------- 按量付费：徽标仍然是金额 ---------------- */
 
+/** 把渲染出来的元素树压成纯文本，用来断言徽标到底显示了什么。 */
 const textOf = function (node, out) {
   if (node === null || node === undefined || typeof node === 'boolean') return out
   if (Array.isArray(node)) {
@@ -968,6 +969,45 @@ const textOf = function (node, out) {
   out.push(String(node))
   return out
 }
+
+hookStates.length = 0
+hookCursor = 0
+miniEffects.length = 0
+globalThis.fetch = async () => ({
+  ok: true,
+  status: 200,
+  json: async () => ({
+    config: { enabled: true, showBalance: true, currency: '\u00a5' },
+    phase: {
+      offPeak: false, dayLabel: '周一', clock: '10:00', offsetLabel: '北京时间',
+      peakDaysText: '周一至周五', peakWindowsText: '09:00-12:00 / 14:00-18:00',
+    },
+    balance: { ok: true, kind: 'balance', label: '余额', providerLabel: 'DeepSeek', total: 32.31, granted: 5, toppedUp: 27.31 },
+    store: { ready: true, savedAtText: '刚刚', path: 'ledger.json' },
+    lastTurn: { cost: 0.012345, quota: 0, calls: 1, turn: 3, atText: '10:01', hit: 10, miss: 20, out: 30 },
+    todayTotals: { calls: 2, cost: 1.41 },
+    sessionTotals: { calls: 2, cost: 1.41, quota: 0, hit: 10, miss: 20, out: 30 },
+    totals: { calls: 2, cost: 1.41, quota: 0 },
+    children: [],
+    byModel: [],
+    quota: { muted: false, rate: 0, remaining: [] },
+  }),
+})
+
+meter({ sessionId: 's-test' })
+miniEffects[miniEffects.length - 1]()
+await new Promise((resolve) => setTimeout(resolve, 0))
+hookCursor = 0
+const moneyElement = meter({ sessionId: 's-test' })
+const moneyText = textOf(moneyElement, []).join('|')
+ok(moneyText.includes('单次'), 'money badge keeps the 单次 metric')
+ok(moneyText.includes('本对话'), 'money badge keeps the 本对话 metric')
+ok(moneyText.includes('今日'), 'money badge keeps the 今日 metric')
+ok(moneyText.includes('\u00a5'), 'money badge still prints money')
+ok(!moneyText.includes('5小时'), 'money badge shows no quota windows')
+ok(String(moneyElement.props.title).includes('单次花费'), 'money badge tooltip talks about money')
+
+/* ---------------- 套餐制：徽标改说额度，不再出现金额 ---------------- */
 
 hookStates.length = 0
 hookCursor = 0
