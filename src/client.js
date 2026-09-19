@@ -215,6 +215,16 @@ return {
       if (Object.keys(prices).length === 0) {
         prices['default'] = { cacheHit: '0', cacheMiss: '0', output: '0', cacheHitOff: '0', cacheMissOff: '0', outputOff: '0' }
       }
+      const afpCoefs = {}
+      const afpSource = (config !== null && config !== undefined && config.afpCoefs !== null && typeof config.afpCoefs === 'object') ? config.afpCoefs : {}
+      const afpKeys = Object.keys(afpSource)
+      for (let index = 0; index < afpKeys.length; index += 1) {
+        const row = afpSource[afpKeys[index]]
+        afpCoefs[afpKeys[index]] = {
+          input: String(row.input === undefined ? 0 : row.input),
+          output: String(row.output === undefined ? row.input : row.output),
+        }
+      }
       return {
         enabled: config.enabled !== false,
         currency: (config !== null && config !== undefined && typeof config.currency === 'string') ? config.currency : '\u00a5',
@@ -228,6 +238,8 @@ return {
         persist: config.persist !== false,
         credentialRef: typeof config.credentialRef === 'string' ? config.credentialRef : 'DEEPSEEK_API_KEY',
         balanceUrl: typeof config.balanceUrl === 'string' ? config.balanceUrl : 'https://api.deepseek.com/user/balance',
+        afpDefaultCoef: String(config.afpDefaultCoef === undefined ? 2.5 : config.afpDefaultCoef),
+        afpCoefs: afpCoefs,
         prices: prices,
       }
     }
@@ -251,6 +263,18 @@ return {
       if (Object.keys(prices).length === 0) {
         prices['default'] = { cacheHit: 0, cacheMiss: 0, output: 0, cacheHitOff: 0, cacheMissOff: 0, outputOff: 0 }
       }
+      const afpCoefs = {}
+      const afpSource = (draft.afpCoefs !== null && typeof draft.afpCoefs === 'object') ? draft.afpCoefs : {}
+      const afpKeys = Object.keys(afpSource)
+      for (let index = 0; index < afpKeys.length; index += 1) {
+        const key = String(afpKeys[index]).trim()
+        if (key.length === 0) continue
+        const row = afpSource[afpKeys[index]]
+        afpCoefs[key] = {
+          input: Number(row.input) || 0,
+          output: Number(row.output) || 0,
+        }
+      }
       return {
         enabled: draft.enabled === true,
         currency: draft.currency,
@@ -264,6 +288,8 @@ return {
         persist: draft.persist === true,
         credentialRef: draft.credentialRef,
         balanceUrl: draft.balanceUrl,
+        afpDefaultCoef: (Number.isFinite(Number(draft.afpDefaultCoef)) ? Number(draft.afpDefaultCoef) : 2.5),
+        afpCoefs: afpCoefs,
         prices: prices,
       }
     }
@@ -377,9 +403,15 @@ return {
         '高峰规则：' + phase.peakDaysText + ' ' + phase.peakWindowsText + '（' + phase.offsetLabel + '）',
       ]
       if (quotaMode) {
-        tipLines.push('额度口径（' + (balanceProviderOf() || '套餐') + '）：按消耗的额度计，不统计金额')
-        tipLines.push('  单次消耗 ' + fmtQuota(lastTurn === null ? 0 : lastTurn.quota)
-          + ' · 本对话消耗 ' + fmtQuota(session.quota))
+        tipLines.push('额度口径（' + (balanceProviderOf() || '套餐') + '）：AFP = (输入 token × 输入系数 + 输出 token × 输出系数) / 10,000，不统计金额')
+        tipLines.push('  单次消耗 ' + fmtQuota(lastTurn === null ? 0 : lastTurn.quota) + ' AFP'
+          + ' · 本对话消耗 ' + fmtQuota(session.quota) + ' AFP')
+        const coef = (state.quota !== undefined && state.quota !== null) ? state.quota.coef : null
+        if (coef !== null && coef !== undefined) {
+          tipLines.push('  当前模型 ' + String(coef.key) + '：输入系数 ' + String(coef.input) + ' / 输出系数 ' + String(coef.output)
+            + (Number(coef.factor) !== 1 ? '（活动 ' + String(coef.factor) + ' 折' + (String(coef.note === undefined ? '' : coef.note).length > 0 ? '：' + String(coef.note) : '') + '）' : '')
+            + ' · 来源 ' + String(coef.source))
+        }
         for (let index = 0; index < quotaRemaining.length; index += 1) {
           const item = quotaRemaining[index]
           const reset = String(item.resetAt === undefined ? '' : item.resetAt).replace('T', ' ').slice(0, 16)
@@ -387,7 +419,11 @@ return {
             + '（' + Number(item.percent).toFixed(2) + '%）· 剩余 ' + fmtQuota(item.remaining)
             + (reset.length > 0 ? ' · 重置 ' + reset : ''))
         }
-        tipLines.push('  额度消耗按观测到的 AFP/Token 比率估算，可能滞后于控制台')
+        const reconcile = (state.quota !== undefined && state.quota !== null) ? state.quota.reconcile : null
+        if (reconcile !== null && reconcile !== undefined && Number(reconcile.samples) > 0) {
+          tipLines.push('  与控制台对账：控制台 +' + fmtQuota(reconcile.delta) + ' / 本插件 +' + fmtQuota(reconcile.computed)
+            + ' = ' + String(reconcile.ratio) + '（' + String(reconcile.samples) + ' 次样本，越接近 1 越准）')
+        }
       }
       if (quotaMode !== true) {
       if (lastTurn === null) {
@@ -510,12 +546,73 @@ return {
       const quotaRemaining = (state.quota !== undefined && state.quota !== null && Array.isArray(state.quota.remaining)) ? state.quota.remaining : []
       const sessionQuota = Number(state.sessionTotals.quota) || 0
       const turnedQuota = lastTurn === null ? 0 : (Number(lastTurn.quota) || 0)
-      /** 一笔调用的金额口径：套餐调用没有金额，只有额度。 */
+      /** 一笔调用的金额口径：套餐调用没有金额，只有额度（AFP）。 */
       const amountText = function (cost, quota) {
         const q = Number(quota) || 0
-        if (q > 0 && (Number(cost) || 0) === 0) return fmtQuota(q) + ' 额度'
+        if (q > 0 && (Number(cost) || 0) === 0) return fmtQuota(q) + ' AFP'
         return fmtMoney(cost, config.currency)
       }
+
+      /* ---- AFP 抵扣系数：展示 + 编辑（存成 config.afpCoefs 覆盖内置表） ---- */
+      const quotaFormula = (state.quota !== undefined && state.quota !== null && typeof state.quota.formula === 'string' && state.quota.formula.length > 0)
+        ? state.quota.formula
+        : 'AFP = (输入 token × 输入系数 + 输出 token × 输出系数) / 10,000'
+      const quotaDefaultCoef = (state.quota !== undefined && state.quota !== null && Number(state.quota.defaultCoef) > 0)
+        ? Number(state.quota.defaultCoef)
+        : 2.5
+      const coefList = (state.quota !== undefined && state.quota !== null && Array.isArray(state.quota.coefs)) ? state.quota.coefs : []
+      const coefDraftOf = function (row) {
+        const override = (editing.afpCoefs !== null && typeof editing.afpCoefs === 'object') ? editing.afpCoefs[row.key] : undefined
+        if (override !== undefined && override !== null) return { input: override.input, output: override.output, edited: true }
+        return { input: String(row.input), output: String(row.output), edited: false }
+      }
+      const changeAfpCoef = function (row, which, value) {
+        const next = Object.assign({}, editing.afpCoefs)
+        const current = coefDraftOf(row)
+        const entry = { input: current.input, output: current.output }
+        entry[which] = String(value).slice(0, 12)
+        next[row.key] = entry
+        setDraft(Object.assign({}, editing, { afpCoefs: next }))
+      }
+      const resetAfpCoef = function (row) {
+        const next = Object.assign({}, editing.afpCoefs)
+        delete next[row.key]
+        setDraft(Object.assign({}, editing, { afpCoefs: next }))
+      }
+      const coefInput = function (row, which) {
+        const current = coefDraftOf(row)
+        return React.createElement('input', {
+          className: 'tb-input tb-num-input',
+          value: which === 'input' ? current.input : current.output,
+          onChange: function (event) { changeAfpCoef(row, which, event.target.value) },
+        })
+      }
+      const coefRows = coefList.map(function (row, index) {
+        const current = coefDraftOf(row)
+        const factorNote = Number(row.factor) !== 1
+          ? '活动 ' + String(row.factor) + ' 折' + (String(row.note === undefined ? '' : row.note).length > 0 ? '（' + String(row.note) + '）' : '')
+          : (row.source === 'default' ? '未知模型 · 按默认系数' : '常态')
+        return React.createElement('tr', { key: 'coef-' + String(index) },
+          React.createElement('td', null,
+            String(row.label === undefined ? row.key : row.label),
+            (Array.isArray(row.models) && row.models.length > 0
+              ? React.createElement('span', { className: 'tb-card-sub' }, ' · ' + row.models.join('、'))
+              : null)),
+          React.createElement('td', { className: 'tb-num' }, coefInput(row, 'input')),
+          React.createElement('td', { className: 'tb-num' }, coefInput(row, 'output')),
+          React.createElement('td', null, factorNote),
+          React.createElement('td', null, current.edited ? '你改过' : (row.source === 'user' ? '你的覆盖值' : (row.source === 'default' ? '默认兜底' : '内置'))),
+          React.createElement('td', { className: 'tb-num' }, (Number(row.quota) || 0) > 0 ? fmtQuota(row.quota) : '—'),
+          React.createElement('td', null, current.edited
+            ? React.createElement('button', { className: 'tb-btn', onClick: function () { resetAfpCoef(row) } }, '恢复内置')
+            : null))
+      })
+      const coefTable = coefList.length === 0
+        ? React.createElement('div', { className: 'tb-empty' }, '还没有方舟套餐模型的调用记录')
+        : table([
+          { label: '模型 / 系数档' }, { label: '输入系数', num: true }, { label: '输出系数', num: true },
+          { label: '活动' }, { label: '来源' }, { label: '已用 AFP', num: true }, { label: '' },
+        ], coefRows, '还没有方舟套餐模型的调用记录')
       const enabled = config.enabled !== false
       const storeBroken = config.persist !== false && store !== null
         && (store.ready !== true || (typeof store.error === 'string' && store.error.length > 0))
@@ -664,10 +761,19 @@ return {
       const modelRows = state.byModel.map(function (row) {
         const tip = priceTip(row, config.currency)
         const unknown = row.priceMatch === 'default' && !isKnownModel(row.key)
+        /** 套餐制模型没有金额单价，列里换成实际用的 AFP 抵扣系数。 */
+        const quotaRow = (Number(row.cost) || 0) === 0 && (Number(row.quota) || 0) > 0
+        const bareOfRow = String(row.key).split('/')
+        const bareModel = bareOfRow.length > 1 ? bareOfRow.slice(1).join('/') : String(row.key)
+        const coefHit = coefList.filter(function (item) {
+          return Array.isArray(item.models) && item.models.indexOf(bareModel) !== -1
+        })[0]
         return React.createElement('tr', { key: row.key },
           React.createElement('td', null, row.key),
-          React.createElement('td', { className: unknown ? 'tb-warn' : null, title: tip },
-            unknown ? tierLabel(row) + ' · 未知模型' : tierLabel(row)),
+          React.createElement('td', { className: (unknown && !quotaRow) ? 'tb-warn' : null, title: quotaRow ? quotaFormula : tip },
+            quotaRow
+              ? 'AFP ×' + String(coefHit === undefined ? '?' : coefHit.input) + (coefHit !== undefined && Number(coefHit.factor) !== 1 ? '（活动 ' + String(coefHit.factor) + ' 折）' : '')
+              : (unknown ? tierLabel(row) + ' · 未知模型' : tierLabel(row))),
           React.createElement('td', { className: 'tb-num' }, fmtInt(row.calls)),
           React.createElement('td', { className: 'tb-num' }, fmtInt(row.hit)),
           React.createElement('td', { className: 'tb-num' }, fmtInt(row.miss)),
@@ -815,12 +921,12 @@ return {
           card('当前时段', React.createElement('span', { className: stateClass(phase) }, stateLabel(phase)),
             phase.dayLabel + ' ' + phase.clock + ' · ' + phase.peakDaysText + ' ' + phase.peakWindowsText),
           quotaMode
-            ? card('单次消耗（额度）', fmtQuota(turnedQuota),
+            ? card('单次消耗（AFP）', fmtQuota(turnedQuota),
               lastTurn === null ? '还没有完成一轮提问' : (lastTurn.atText + ' · ' + String(lastTurn.calls) + ' 次调用' + (lastTurn.turn > 0 ? ' · 第 ' + String(lastTurn.turn) + ' 轮' : '')))
             : card('单次花费', lastTurn === null ? '—' : fmtMoney(lastTurn.cost, config.currency),
               lastTurn === null ? '还没有完成一轮提问' : (lastTurn.atText + ' · ' + String(lastTurn.calls) + ' 次调用' + (lastTurn.turn > 0 ? ' · 第 ' + String(lastTurn.turn) + ' 轮' : ''))),
           quotaMode
-            ? card('本对话消耗（额度）', fmtQuota(sessionQuota), String(state.sessionTotals.calls) + ' 次调用 · 按观测比率估算')
+            ? card('本对话消耗（AFP）', fmtQuota(sessionQuota), String(state.sessionTotals.calls) + ' 次调用 · 按官方抵扣系数计')
             : card('今日花费', fmtMoney(today.cost, config.currency), today.calls + ' 次调用'),
           childList.length === 0 ? null : card('本对话子会话', quotaMode ? fmtQuota(childQuota) : fmtMoney(childCost, config.currency),
             String(childCalls) + ' 次调用 · ' + String(childList.length) + ' 个，已并入「本对话」'),
@@ -837,8 +943,7 @@ return {
           : null,
         (balance === null || !Array.isArray(balance.quotaPeriods) || balance.quotaPeriods.length === 0) ? null : React.createElement('div', null,
           React.createElement('div', { className: 'tb-card-sub' },
-            '本对话已消耗 ' + fmtQuota(session.quota) + ' · 单次消耗 ' + fmtQuota(lastTurn === null ? 0 : lastTurn.quota)
-              + '（按观测到的 AFP/Token 比率估算，可能滞后于控制台）'),
+            '本对话已消耗 ' + fmtQuota(sessionQuota) + ' AFP · 单次消耗 ' + fmtQuota(turnedQuota) + ' AFP'),
           React.createElement('div', { className: 'tb-section-title' },
             '套餐额度'
               + (balance.planMeta !== undefined && balance.planMeta !== null && typeof balance.planMeta.tier === 'string' && balance.planMeta.tier.length > 0
@@ -859,11 +964,19 @@ return {
               React.createElement('td', { className: 'tb-num' }, Number(period.percent).toFixed(2) + '%'),
               React.createElement('td', null, String(period.resetAt === undefined ? '' : period.resetAt).replace('T', ' ').slice(0, 16)))
           }), '没有窗口')),
+        React.createElement('div', { className: 'tb-section-title' }, 'AFP 抵扣系数（火山方舟 Agent Plan）'),
+        React.createElement('div', { className: 'tb-card-sub' },
+          String(quotaFormula) + '　输入 token 含缓存命中 / 未命中 / 写入。默认值取自官方《套餐内 AFP 抵扣规则》，'
+            + '活动折扣按调用时刻生效；这里改过的会作为你的覆盖值存档。'),
+        coefTable,
+        React.createElement('div', { className: 'tb-head' },
+          field('默认系数（未知模型）', editing.afpDefaultCoef, function (value) { change({ afpDefaultCoef: value.slice(0, 12) }) },
+            '内置表里没有的模型按这个系数算，当前 ' + String(quotaDefaultCoef))),
         React.createElement('div', { className: 'tb-section-title' }, '累计（含历史存档，不随重启重置）'),
         cards([
           card('总花费', fmtMoney(total.cost, config.currency), total.calls + ' 次调用'),
           (Number(total.quota) || 0) > 0
-            ? card('套餐额度消耗', fmtQuota(total.quota), '按观测到的 AFP/Token 比率估算，不含金额')
+            ? card('套餐 AFP 消耗', fmtQuota(total.quota), '按官方抵扣系数计，不含金额')
             : null,
           card('缓存命中输入', fmtInt(total.hit), '命中率 ' + hitRate.toFixed(1) + '%'),
           card('缓存未命中输入', fmtInt(total.miss)),

@@ -150,12 +150,12 @@ tarball: https://github.com/singei8/DSH-TOKEN-feiyong/releases/download/v1.2.0/d
 | `dsh-plugin` topic | 仓库原来的 8 个 topic 里没有它 | ✅ 已于 2026-09-11 补上 |
 | 真实可安装的代码 | `lib/index.js` + `lib/client.js`（`src/` 为源码，`scripts/build.mjs` 构建） | ✅ 已移植 |
 | `dsh.bundle` 清单 + `cordis.patch.yml` | `package.json` 含 `dsh.bundle` / `dsh.client` / `exports` | ✅ 已就绪 |
-| `tarball` 字段 | Release 资产 `dsh-token-feiyong.tgz`（**不带版本号**，最新为 v1.6.0） | ✅ 已发布 |
+| `tarball` 字段 | Release 资产 `dsh-token-feiyong.tgz`（**不带版本号**，最新为 v1.7.0） | ✅ 已发布 |
 | 仓库创建满 1 天 | `created_at = 2026-09-11T14:09:19Z` | ⏳ **2026-09-12 14:09 (UTC) 之后**才满足 |
 | 条目文件 | `data/plugins/singei8__DSH-TOKEN-feiyong.yml`（内容见下） | ⏳ 待提 PR |
 | npm 包 | 未发布 | ⏳ 可选，不影响收录 |
 
-**移植已完成并验证**：`node scripts/check.mjs` 211 项自检全过（真起 HTTP 服务跑通 5 条路由、
+**移植已完成并验证**：`node scripts/check.mjs` 237 项自检全过（真起 HTTP 服务跑通 5 条路由、
 记账、高峰/低谷单价含周末判档、单次收口、账本落盘、配置保存与清空、多供应商余额、方舟套餐额度
 计量与徽标渲染、客户端 bundle 加载与 slot 注册、apply 重入不重复计数）。真实宿主里也实测通过：
 热挂载后 `POST /dsh-token-feiyong/state` 返回 200，`__DSH_BOOT__.entries` 含本插件，
@@ -175,7 +175,7 @@ lib/index.js          宿主半边（Node，ESM，无 import）
 lib/client.js         浏览器半边（window.__ModuleLoader__ 工厂，require('react')）
 src/                  人类可读源码：两个动态包函数体
 scripts/build.mjs     定点变换 + 逐处断言
-scripts/check.mjs     211 项自检
+scripts/check.mjs     237 项自检
 ```
 
 与最初设计的差异（都是实测后修正的）：
@@ -231,7 +231,7 @@ screenshots.json      可选
 
 ### 4.2 自测与实测结果
 
-`node scripts/check.mjs` —— **211 项全过**：
+`node scripts/check.mjs` —— **237 项全过**：
 
 1. 宿主 `apply` 后注册 5 条 exact 路由，且在 `ctx.effect` 内挂载（可注销）。
 2. 真起 HTTP 服务验证：`POST /state` 200、缺自定义头 403、GET 405、坏 JSON 400。
@@ -258,9 +258,9 @@ screenshots.json      可选
 
 前两步已完成（✅），现在只等仓库满 1 天就能提 PR。
 
-1. ✅ 完成移植，`node scripts/check.mjs` 211 项全过，`main` 已推到
+1. ✅ 完成移植，`node scripts/check.mjs` 237 项全过，`main` 已推到
    `github.com/singei8/DSH-TOKEN-feiyong`。
-2. ✅ 打 tag、发 Release（最新 v1.6.0），资产名始终不带版本号：
+2. ✅ 打 tag、发 Release（最新 v1.7.0），资产名始终不带版本号：
    <https://github.com/singei8/DSH-TOKEN-feiyong/releases/latest/download/dsh-token-feiyong.tgz>
    （已验证可下载，SHA256 与本地构建一致）。
 3. ⏳ 等仓库创建满 1 天：**2026-09-12 14:09 UTC 之后**。

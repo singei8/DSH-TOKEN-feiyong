@@ -8,7 +8,7 @@
 | 宿主 | `lib/index.js` | DSH 的 Node 进程（拦截模型调用、计费、余额、落盘） |
 | 客户端 | `lib/client.js` | 浏览器（输入框下方徽标 + 设置页「费用统计」） |
 | 构造 | 宿主半边直接改 `lib/index.js`；客户端半边改 `src/client.js` 后 `node scripts/build.mjs` | 两侧都不需要外部依赖 |
-| 自检 | `node scripts/check.mjs` | 211 项：计价 / 分时 / 收口 / node:fs 落盘 / 多供应商余额 / 方舟额度 / slot 注册 / 重入 |
+| 自检 | `node scripts/check.mjs` | 237 项：计价 / 分时 / 收口 / node:fs 落盘 / 多供应商余额 / 方舟额度 / slot 注册 / 重入 |
 
 ---
 
@@ -92,7 +92,7 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modul
 | 首次调用后 | 生成存档 `<DSH_HOME>/token-billing-ledger.json`（通常 `~/.dsh/token-billing-ledger.json`） |
 | 子会话并入 | 打开侧边对话提问后，主对话的「本对话」包含该花费；设置页出现「本对话的子会话」表 |
 | 余额按供应商 | 切到 GLM 会话后徽标显示的是智谱余额（设置页「当前模型 · 余额来源」会写明接口地址） |
-| 方舟套餐额度 | 切到 `volc-ark-coding` 的模型后徽标改为额度口径：`● … · 单次 … · 本对话 … · 5小时 … · 周额度 … · 月额度 …`（后三项是**剩余**额度），悬停列出三个窗口的已用/剩余/重置时间 |
+| 方舟套餐额度 | 切到 `volc-ark-coding` 的模型后徽标改为 AFP 口径：`● … · 单次 … · 本对话 … · 5小时 … · 周额度 … · 月额度 …`（后三项是**剩余**额度）；悬停列出当前模型的抵扣系数、三个窗口的已用/剩余/重置时间，以及与控制台的对账比值 |
 | Host 日志 | 含 `[billing]` 前缀的行：`apply:` / `http: mounted 5 routes` / `store: ready` / `adopted N historical child session(s)` |
 
 改过 `lib/index.js` 或 `src/client.js` 后跑一次 `node scripts/check.mjs`：它会真起一个 HTTP 服务
@@ -112,8 +112,10 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modul
 - **套餐额度（火山方舟 Agent Plan）**：需要本机装有并已登录 `arkcli`（`arkcli auth whoami` 能返回
   `profile.type = agent-plan`）。插件会执行 `arkcli usage plan --format json` 取 5h / weekly / monthly
   三个窗口的用量占比；未安装或未登录时如实报错，不影响计费本身。
-  这类 provider 的调用**不计金额**（`cost = 0`），改按「额度增量 ÷ 同期 token 量」估出的比率折算额度，
-  所以数字是估算值、会滞后于控制台。
+  这类 provider 的调用**不计金额**（`cost = 0`），改按官方 AFP 抵扣系数算额度：
+  `AFP = (输入 token × 输入系数 + 输出 token × 输出系数) / 10,000`（输入含缓存命中/未命中/写入），
+  系数按模型不同（内置表 0.25 ~ 10，活动折扣按调用时刻生效），设置页可逐个模型覆盖。
+  插件每次拿到控制台新快照都会做一次对账，徽标悬停能看到比值。
 - **余额（按供应商）**：DeepSeek 用 `DEEPSEEK_API_KEY` 请求 `/user/balance`；
   智谱 GLM 用 `BIGMODEL_API_KEY` 请求 `open.bigmodel.cn/api/biz/account/query-customer-account-report`。
   凭据按 `env` → `credentials` 服务 → `<DSH_HOME>/.credentials.yaml` 的 `refs` 段依次尝试。
@@ -124,7 +126,7 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\web\node_modul
 
 ```powershell
 node scripts/build.mjs   # 只重建 lib/client.js（宿主半边是直接维护的来源文件）
-node scripts/check.mjs   # 211 项自检
+node scripts/check.mjs   # 237 项自检
 ```
 
 ---

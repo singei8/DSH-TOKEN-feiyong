@@ -647,9 +647,10 @@ eq(failed.payload.balance.ok, false, 'failing command -> not ok')
 ok(String(failed.payload.balance.error).includes('额度查询失败'), 'failing command reports the failure')
 await call('save', { sessionId: 's-ark', config: { balanceProfiles: {} } })
 
-/* ---------------- 套餐额度计量：消耗 + 剩余 ---------------- */
+/* ---------------- 套餐额度计量：AFP 抵扣系数 ---------------- */
 
-// 用「改写额度数据文件」来模拟控制台的额度增长，从而估出 AFP/Token 比率。
+// 按官方文档：AFP = (输入 token × 输入系数 + 输出 token × 输出系数) / 10,000
+// 输入 token 含缓存命中/未命中/写入三种。
 const raisedPlan = join(home, 'fake-ark-raised.json')
 writeFileSync(raisedPlan, JSON.stringify({
   viewer: { user_name: 'tester' },
@@ -676,59 +677,95 @@ await call('save', {
   },
 })
 
-// 第一次快照：只建基准，不比出比率
+// 第一次快照：建基准 + 校验剩余窗口
 const baseline = await call('balance', { sessionId: 's-ark' })
 eq(baseline.payload.quota.muted, true, 'quota mode is on for the Ark profile')
 eq(baseline.payload.quota.remaining.length, 3, 'three remaining windows')
 near(baseline.payload.quota.remaining[0].remaining, 2000 - 19.1137, 'remaining = total - used')
+near(baseline.payload.quota.reconcile.samples, 0, 'first snapshot only builds the baseline')
 
-// 一次调用（此刻比率还是 0，额度记 0）
-await withClock('2026-09-14T02:00:00Z', async () => { await emit(ARK_META, PRO_USAGE) })
-
-// 控制台额度上涨 → 再取快照即可估出比率
-writeFileSync(printPlanScript, readFileSync(raisedPlan, 'utf8'), 'utf8')
-const risen = await call('balance', { sessionId: 's-ark' })
-eq(risen.payload.balance.ok, true, 'plan still ok after the raise')
-ok(risen.payload.quota.rate > 0, 'AFP/token rate estimated from the observed delta')
-near(risen.payload.quota.remaining[0].remaining, 2000 - 20, 'remaining follows the new snapshot')
-
-// 之后再调用：记额度、不计钱
+// PRO_USAGE: 命中 1,000,000 + 未命中 500,000（输入 1,500,000）+ 输出 100,000
+// doubao-seed-2.1-turbo 系数 2.5 → (1500000 * 2.5 + 100000 * 2.5) / 10000 = 400
+const arkBefore = ((await call('state', { sessionId: 's-ark' })).payload.byModel
+  .find((entry) => entry.key === 'volc-ark-coding/doubao-seed-2-1-turbo-260628') ?? { quota: 0 }).quota
 await withClock('2026-09-14T02:00:00Z', async () => { await emit(ARK_META, PRO_USAGE) })
 state = (await call('state', { sessionId: 's-ark' })).payload
 const arkModel = state.byModel.find((entry) => entry.key === 'volc-ark-coding/doubao-seed-2-1-turbo-260628')
 ok(arkModel !== undefined, 'quota-based model appears in byModel')
 eq(arkModel.cost, 0, 'quota-based model costs no money')
-ok(arkModel.quota > 0, 'quota-based model records quota usage')
-ok(state.sessionTotals.quota > 0, 'conversation quota usage accumulates')
-near(state.sessionTotals.quota, arkModel.quota, 'session quota equals the model quota here')
+eq(arkModel.quota - arkBefore, 400, 'AFP follows the official formula (coefficient 2.5)')
+eq(state.sessionTotals.quota, 400 + 400, 'conversation AFP accumulates across the two calls')
+eq(state.quota.coef.key, 'doubao-seed-2-1-turbo', 'the session resolves its AFP coefficient')
+near(state.quota.coef.input, 2.5, 'coefficient value comes from the builtin table')
+eq(state.quota.coef.source, 'builtin', 'coefficient source is the builtin table')
+
+// 系数按模型分流：doubao-seed-2.0-mini 是 0.25，kimi-k3 是 10 —— 差 40 倍
+await withClock('2026-09-14T02:00:00Z', async () => {
+  await emit({ provider: 'volc-ark-coding', model: 'doubao-seed-2-0-mini-260215', sessionId: 's-ark' }, PRO_USAGE)
+})
+await withClock('2026-09-14T02:00:00Z', async () => {
+  await emit({ provider: 'volc-ark-coding', model: 'kimi-k3', sessionId: 's-ark' }, PRO_USAGE)
+})
+state = (await call('state', { sessionId: 's-ark' })).payload
+const miniRow = state.byModel.find((entry) => entry.key === 'volc-ark-coding/doubao-seed-2-0-mini-260215')
+const kimiRow = state.byModel.find((entry) => entry.key === 'volc-ark-coding/kimi-k3')
+eq(miniRow.quota, 40, 'doubao-seed-2.0-mini uses coefficient 0.25')
+eq(kimiRow.quota, 1600, 'kimi-k3 uses coefficient 10')
+
+// 活动折扣按调用时刻生效：deepseek-v4.1-flash 活动期（09-15~09-28）实测 1.0，活动外 2.5
+await withClock('2026-09-16T02:00:00Z', async () => {
+  await emit({ provider: 'volc-ark-coding', model: 'deepseek-v4-1-flash', sessionId: 's-ark' }, PRO_USAGE)
+})
+await withClock('2026-10-01T02:00:00Z', async () => {
+  await emit({ provider: 'volc-ark-coding', model: 'deepseek-v4-1-flash', sessionId: 's-ark' }, PRO_USAGE)
+})
+state = (await call('state', { sessionId: 's-ark' })).payload
+const v41 = state.byModel.find((entry) => entry.key === 'volc-ark-coding/deepseek-v4-1-flash')
+eq(v41.quota, 160 + 400, 'the limited-time discount is applied by call time (1.0 inside, 2.5 outside)')
+const v41Coef = state.quota.coefs.find((entry) => entry.key === 'deepseek-v4-1-flash')
+near(v41Coef.factor, 0.4, 'activity factor is reported in the coefficient table')
+near(v41Coef.input, 1, 'and the resolved coefficient is 2.5 x 0.4 = 1.0 (matches the console)')
+
+// 未知模型按默认系数兜底，并且能被用户覆盖
+await withClock('2026-09-14T02:00:00Z', async () => {
+  await emit({ provider: 'volc-ark-coding', model: 'mystery-ark-model', sessionId: 's-ark' }, PRO_USAGE)
+})
+state = (await call('state', { sessionId: 's-ark' })).payload
+const mysteryRow = state.byModel.find((entry) => entry.key === 'volc-ark-coding/mystery-ark-model')
+eq(mysteryRow.quota, 400, 'unknown model falls back to the default coefficient (2.5)')
+
+await call('save', { sessionId: 's-ark', config: { afpCoefs: { 'mystery-ark-model': { input: 1, output: 2 } } } })
+await withClock('2026-09-14T02:00:00Z', async () => {
+  await emit({ provider: 'volc-ark-coding', model: 'mystery-ark-model', sessionId: 's-ark' }, PRO_USAGE)
+})
+state = (await call('state', { sessionId: 's-ark' })).payload
+const mysteryRow2 = state.byModel.find((entry) => entry.key === 'volc-ark-coding/mystery-ark-model')
+eq(mysteryRow2.quota, 400 + 170, 'a user coefficient override wins over the default (1/2 -> 170 AFP)')
+const mysteryCoef = state.quota.coefs.find((entry) => entry.key === 'mystery-ark-model')
+eq(mysteryCoef.source, 'user', 'the override is marked as a user value')
+await call('save', { sessionId: 's-ark', config: { afpCoefs: {} } })
 
 // 收口后「单次」也带额度
 listeners['api-session/status'][0]('s-ark', false)
 state = (await call('state', { sessionId: 's-ark' })).payload
 ok(state.lastTurn.quota > 0, 'last turn carries quota usage')
 
-// 控制台延迟出账：某一刻的快照没看到增量时，token 基准不能被推进，
-// 否则那段额度会被摊到之后的一小段 token 上，比率被高估。
+// 对账：控制台增量 vs 本插件按系数算出来的 AFP（延迟出账时不推进基准）
+const computedBefore = state.sessionTotals.quota
+const computedSince = computedBefore - arkBefore // 基准快照之前的那一笔不算在内
+writeFileSync(printPlanScript, readFileSync(raisedPlan, 'utf8'), 'utf8')
+const risen = await call('balance', { sessionId: 's-ark' })
+eq(risen.payload.balance.ok, true, 'plan still ok after the raise')
+eq(risen.payload.quota.reconcile.samples, 1, 'the snapshot pair produces one reconcile sample')
+near(risen.payload.quota.reconcile.delta, 20 - 19.1137, 'reconcile delta comes from the console')
+near(risen.payload.quota.reconcile.computed, computedSince, 'reconcile counts only the AFP since the baseline snapshot')
+near(risen.payload.quota.reconcile.ratio, Math.round(((20 - 19.1137) / computedSince) * 1e4) / 1e4, 'reconcile ratio = console delta / computed AFP')
+near(risen.payload.quota.remaining[0].remaining, 2000 - 20, 'remaining follows the new snapshot')
+
+// 没看到增量的快照：不推进基准，样本数不变
 const flat = await call('balance', { sessionId: 's-ark' })
-eq(flat.payload.quota.rate, risen.payload.quota.rate, 'a lagging snapshot leaves the rate alone')
-await withClock('2026-09-14T02:00:00Z', async () => { await emit(ARK_META, PRO_USAGE) })
-const laggedPlan = join(home, 'fake-ark-lagged.json')
-writeFileSync(laggedPlan, JSON.stringify({
-  viewer: { user_name: 'tester' },
-  items: [{
-    product: 'agent-plan', edition: 'personal', tier: 'small', subscribed: true,
-    periods: [
-      { label: '5h', used: 21, total: 2000, percent: 1.05, reset_at: '2026-09-18T05:13:12+08:00' },
-      { label: 'weekly', used: 21, total: 7000, percent: 0.3, reset_at: '2026-09-21T00:00:00+08:00' },
-      { label: 'monthly', used: 120, total: 20000, percent: 0.6, reset_at: '2026-10-10T23:59:59+08:00' },
-    ],
-  }],
-}), 'utf8')
-writeFileSync(printPlanScript, readFileSync(laggedPlan, 'utf8'), 'utf8')
-const caught = await call('balance', { sessionId: 's-ark' })
-// 增量 20 -> 21 = 1.0；这期间攒下的 token 是「上一次真的用掉增量之后」的两笔
-// PRO_USAGE（每笔 1,600,000），不能只除最后一笔。
-near(caught.payload.quota.rate, 1 / 3200000, 'the lagging window is divided over all the tokens it covers')
+eq(flat.payload.quota.reconcile.samples, 1, 'a lagging snapshot produces no new sample')
+near(flat.payload.quota.reconcile.delta, risen.payload.quota.reconcile.delta, 'and leaves the reconcile alone')
 
 // 按量付费的模型不受影响
 await withClock('2026-09-14T02:00:00Z', async () => { await emit(PRO, PRO_USAGE) })
@@ -1037,7 +1074,12 @@ globalThis.fetch = async () => ({
     children: [],
     byModel: [],
     quota: {
-      muted: true, rate: 0.0001,
+      muted: true, rate: 0,
+      formula: 'AFP = (\u8f93\u5165 token \u00d7 \u8f93\u5165\u7cfb\u6570 + \u8f93\u51fa token \u00d7 \u8f93\u51fa\u7cfb\u6570) / 10,000',
+      defaultCoef: 2.5,
+      coef: { model: 'doubao-seed-2-1-turbo-260628', key: 'doubao-seed-2-1-turbo', label: 'doubao-seed-2.1-turbo', source: 'builtin', input: 2.5, output: 2.5, factor: 1, note: '' },
+      coefs: [{ key: 'doubao-seed-2-1-turbo', label: 'doubao-seed-2.1-turbo', input: 2.5, output: 2.5, source: 'builtin', factor: 1, note: '', models: ['doubao-seed-2-1-turbo-260628'], quota: 25, calls: 2 }],
+      reconcile: { at: 1, atText: '\u521a\u521a', delta: 0.8863, computed: 0.9, ratio: 0.9848, samples: 3 },
       remaining: [
         { label: '5h', used: 19.1137, total: 2000, remaining: 1980.8863, percent: 0.9557, resetAt: '2026-09-18T05:13:12+08:00' },
         { label: 'weekly', used: 19.1137, total: 7000, remaining: 6980.8863, percent: 0.2731, resetAt: '2026-09-21T00:00:00+08:00' },
@@ -1066,6 +1108,70 @@ ok(!quotaText.includes('\u00a5'), 'quota badge prints no money at all')
 ok(String(quotaElement.props.title).includes('额度口径'), 'quota badge tooltip explains the quota basis')
 ok(String(quotaElement.props.title).includes('5小时 已用 19.11/2000'), 'quota tooltip lists the window usage')
 ok(String(quotaElement.props.title).split('5小时 已用').length === 2, 'the window list is not printed twice')
+ok(String(quotaElement.props.title).includes('输入系数 2.5'), 'quota tooltip shows the resolved AFP coefficient')
+ok(String(quotaElement.props.title).includes('AFP = (输入 token'), 'quota tooltip shows the official formula')
+ok(String(quotaElement.props.title).includes('对账'), 'quota tooltip shows the console reconciliation')
+ok(source.includes('AFP 抵扣系数'), 'the settings page has an AFP coefficient section')
+ok(source.includes('afpCoefs'), 'the client carries AFP coefficient overrides')
+
+/* ---------------- 设置页真的能渲染（AFP 系数表不能把页面搞崩） ---------------- */
+
+const panel = registrations2.find((item) => item.spec.name === 'settings.section')?.Component
+ok(typeof panel === 'function', 'settings section component found')
+
+const panelState = {
+  config: {
+    enabled: true, currency: '\u00a5', utcOffsetMinutes: 480, peakDays: [1, 2, 3, 4, 5],
+    peakWindows: [{ start: '09:00', end: '12:00' }], offPeakRatio: 0.5, showBalance: true,
+    mergeChildSessions: true, unconfinedBalance: true, persist: true,
+    credentialRef: 'DEEPSEEK_API_KEY', balanceUrl: 'https://api.deepseek.com/user/balance',
+    afpDefaultCoef: 2.5, afpCoefs: {},
+    prices: { default: { cacheHit: 0.04, cacheMiss: 2, output: 8, cacheHitOff: 0.02, cacheMissOff: 1, outputOff: 4 } },
+  },
+  phase: { offPeak: false, dayLabel: '\u5468\u4e00', clock: '10:00', offsetLabel: '\u5317\u4eac\u65f6\u95f4', peakDaysText: '\u5468\u4e00\u81f3\u5468\u4e94', peakWindowsText: '09:00-12:00' },
+  balance: { ok: true, kind: 'quota', label: '\u5957\u9910\u989d\u5ea6', providerLabel: '\u706b\u5c71\u65b9\u821f Agent Plan', quotaText: '0.96%', via: 'cli:arkcli', planMeta: { tier: 'small' }, quotaPeriods: [{ label: '5h', used: 19.1137, total: 2000, percent: 0.9557, resetAt: '2026-09-18T05:13:12+08:00' }] },
+  balanceProfile: { kind: 'ark-plan', providerKey: 'volc-ark-coding', providerLabel: '\u706b\u5c71\u65b9\u821f Agent Plan', label: '\u5957\u9910\u989d\u5ea6', url: '', credentialRef: '', activeProvider: 'volc-ark-coding', activeModel: 'deepseek-v4-1-flash' },
+  store: { ready: true, path: 'ledger.json', savedAt: 1, savedAtText: '\u521a\u521a', error: '', rows: 1 },
+  lastTurn: { cost: 0, quota: 1.81, calls: 1, turn: 2, atText: '20:30', hit: 1000, miss: 100, write: 0, out: 50 },
+  todayTotals: { calls: 1, cost: 0, quota: 1.81, hit: 1000, miss: 100, write: 0, out: 50 },
+  sessionTotals: { calls: 1, cost: 0, quota: 1.81, hit: 1000, miss: 100, write: 0, out: 50, offPeakCalls: 1 },
+  totals: { calls: 1, cost: 0, quota: 1.81, hit: 1000, miss: 100, write: 0, out: 50, offPeakCalls: 1 },
+  children: [],
+  byModel: [{ key: 'volc-ark-coding/deepseek-v4-1-flash', calls: 1, cost: 0, quota: 1.81, hit: 1000, miss: 100, write: 0, out: 50, priceKey: 'default', priceMatch: 'default' }],
+  rows: [{ time: '20:30', model: 'deepseek-v4-1-flash', hit: 1000, miss: 100, out: 50, offPeak: true, cost: 0, quota: 1.81 }],
+  rowsAll: [{ time: '20:30', model: 'deepseek-v4-1-flash', hit: 1000, miss: 100, out: 50, offPeak: true, cost: 0, quota: 1.81, sessionId: 's-ark' }],
+  knownModels: ['deepseek-v4-1-flash'],
+  quota: {
+    muted: true,
+    formula: 'AFP = (\u8f93\u5165 token \u00d7 \u8f93\u5165\u7cfb\u6570 + \u8f93\u51fa token \u00d7 \u8f93\u51fa\u7cfb\u6570) / 10,000',
+    defaultCoef: 2.5,
+    coef: { model: 'deepseek-v4-1-flash', key: 'deepseek-v4-1-flash', label: 'deepseek-v4.1-flash', source: 'builtin', input: 1, output: 1, factor: 0.4, note: '\u5b9e\u6d4b\u6709\u6548\u7cfb\u6570 1.0' },
+    coefs: [
+      { key: 'deepseek-v4-1-flash', label: 'deepseek-v4.1-flash', input: 1, output: 1, source: 'builtin', factor: 0.4, note: '\u5b9e\u6d4b\u6709\u6548\u7cfb\u6570 1.0', models: ['deepseek-v4-1-flash'], quota: 1.81, calls: 1 },
+      { key: 'kimi-k3', label: 'kimi-k3', input: 10, output: 10, source: 'builtin', factor: 1, note: '', quota: 0, calls: 0 },
+    ],
+    reconcile: { at: 1, atText: '\u521a\u521a', delta: 0.8863, computed: 0.9, ratio: 0.9848, samples: 3 },
+    remaining: [{ label: '5h', used: 19.1137, total: 2000, remaining: 1980.8863, percent: 0.9557, resetAt: '2026-09-18T05:13:12+08:00' }],
+  },
+}
+
+globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => panelState })
+hookStates.length = 0
+hookCursor = 0
+miniEffects.length = 0
+panel()
+const panelEffects = miniEffects.slice()
+for (const effect of panelEffects) effect()
+await new Promise((resolve) => setTimeout(resolve, 0))
+hookCursor = 0
+const panelElement = panel()
+const panelText = textOf(panelElement, []).join('|')
+ok(panelText.includes('AFP \u62b5\u6263\u7cfb\u6570'), 'the settings page renders the AFP coefficient section')
+ok(panelText.includes('AFP = (\u8f93\u5165 token'), 'and prints the official formula')
+ok(panelText.includes('deepseek-v4.1-flash'), 'and lists the model with its coefficient')
+ok(panelText.includes('\u5b9e\u6d4b\u6709\u6548\u7cfb\u6570 1.0'), 'and shows the activity note')
+ok(panelText.includes('\u9ed8\u8ba4\u7cfb\u6570'), 'and offers the default coefficient field')
+ok(!panelText.includes('undefined'), 'the settings page renders without undefined leaking')
 
 globalThis.fetch = realFetch
 globalThis.fetch = realOutboundFetch

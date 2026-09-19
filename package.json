@@ -1,7 +1,7 @@
 {
   "name": "dsh-token-feiyong",
-  "version": "1.6.0",
-  "description": "DSH（DeepSeek Harness）token 计费插件：内置官方价目表（DeepSeek 分高峰低谷，智谱 GLM 另计），逐笔计算花费（缓存命中 / 未命中 / 输出），含账户余额、单次与本对话统计；火山方舟 Agent Plan 等预付费套餐按额度计量（单次/本对话消耗 + 5小时/周/月剩余），侧边对话与子代理的花费并入所属主对话，数据本地持久化。",
+  "version": "1.7.0",
+  "description": "DSH（DeepSeek Harness）token 计费插件：内置官方价目表（DeepSeek 分高峰低谷，智谱 GLM 另计），逐笔计算花费（缓存命中 / 未命中 / 输出），含账户余额、单次与本对话统计；火山方舟 Agent Plan 等预付费套餐按官方 AFP 抵扣系数计量（每个模型系数不同，单次/本对话消耗 + 5小时/周/月剩余），侧边对话与子代理的花费并入所属主对话，数据本地持久化。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
