@@ -19,3 +19,6 @@ Thumbs.db
 # local scratch
 _extract/
 *.local.json
+
+# 本机开发脚本（冒烟 / 回放 / 发布重试），不进公开仓库；见 docs/MEMO.md 第 8 节
+scripts/dev/

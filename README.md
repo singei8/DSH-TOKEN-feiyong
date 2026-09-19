@@ -240,6 +240,7 @@ DSH-TOKEN-feiyong/
 ├─ cordis.patch.yml             # dsh.bundle.patch：把本插件插入 profile 的层叠配置
 ├─ docs/
 │  ├─ billing-explained.html    # 「本对话」计费逻辑可视化：流程图 / 公式 / 逐笔回放 / 计算器
+│  ├─ MEMO.md                   # 维护者备忘录：文件地图 / 不变量 / 命令速查 / 发布清单（改代码前先看它）
 │  └─ PUBLISHING.md             # 官方收录方式与发布设计（awesome-dsh-plugin）
 ├─ examples/
 │  └─ ledger.sample.json        # 本地存档格式示例
